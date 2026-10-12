@@ -1,0 +1,100 @@
+#!/bin/bash
+# swiftw — `swift`, minus the papercuts of a Command Line Tools-only install.
+#
+#   ./scripts/swiftw build
+#   ./scripts/swiftw test
+#
+# Updating the Command Line Tools in place can leave files from the previous release behind.
+# Two of them break every SwiftPM build:
+#
+#   1. usr/include/swift/module.modulemap, superseded by bridging.modulemap:
+#        error: redefinition of module 'SwiftBridging'
+#   2. usr/lib/swift/pm/*/*.swiftmodule/*.private.swiftinterface, older than the public interface:
+#        Undefined symbols … PackageDescription.Package.__allocating_init(…)
+#
+# The permanent fix for those needs sudo:
+#
+#   sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install
+#
+# Until then this wrapper hides the stale files from the compiler.
+#
+# Separately, without Xcode SwiftPM does not put Testing.framework on the framework search path
+# (`error: no such module 'Testing'`), so test builds get the missing -F and rpath.
+#
+# With Xcode selected, or on a toolchain with none of these problems, it simply runs `swift "$@"`.
+
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+developer_dir="$(xcode-select -p 2>/dev/null || true)"
+workaround_dir="$root/.build/toolchain-workaround"
+extra_flags=()
+
+# 1. Stale Clang module map: mask it with an empty file through a VFS overlay.
+swift_include="$developer_dir/usr/include/swift"
+if [ -f "$swift_include/module.modulemap" ] && [ -f "$swift_include/bridging.modulemap" ]; then
+    mkdir -p "$workaround_dir"
+    : > "$workaround_dir/empty.modulemap"
+    cat > "$workaround_dir/overlay.yaml" <<YAML
+{
+  "version": 0,
+  "case-sensitive": false,
+  "roots": [
+    {
+      "name": "$swift_include",
+      "type": "directory",
+      "contents": [
+        { "name": "module.modulemap", "type": "file", "external-contents": "$workaround_dir/empty.modulemap" }
+      ]
+    }
+  ]
+}
+YAML
+    extra_flags+=(-Xswiftc -vfsoverlay -Xswiftc "$workaround_dir/overlay.yaml")
+    extra_flags+=(-Xbuild-tools-swiftc -vfsoverlay -Xbuild-tools-swiftc "$workaround_dir/overlay.yaml")
+fi
+
+# 2. Stale SwiftPM interfaces: point SwiftPM at a copy of its libraries without them.
+pm_libs="$developer_dir/usr/lib/swift/pm"
+stale_interface=""
+for private in "$pm_libs"/ManifestAPI/PackageDescription.swiftmodule/*.private.swiftinterface; do
+    [ -e "$private" ] || continue
+    public="${private%.private.swiftinterface}.swiftinterface"
+    if [ -e "$public" ] && [ "$private" -ot "$public" ]; then stale_interface=1; fi
+done
+if [ -n "$stale_interface" ]; then
+    if [ ! -d "$workaround_dir/pm/ManifestAPI" ]; then
+        mkdir -p "$workaround_dir/pm"
+        cp -R "$pm_libs/." "$workaround_dir/pm/"
+        find "$workaround_dir/pm" -name '*.private.swiftinterface' -delete
+    fi
+    export SWIFTPM_CUSTOM_LIBS_DIR="$workaround_dir/pm"
+fi
+
+# 3. Swift Testing ships as a framework in the Command Line Tools, but only -I/-L are passed.
+testing_frameworks="$developer_dir/Library/Developer/Frameworks"
+builds_tests=""
+case " $* " in
+    " test "* | *" --build-tests "*) builds_tests=1 ;;
+esac
+if [ -n "$builds_tests" ] && [ -d "$testing_frameworks/Testing.framework" ]; then
+    extra_flags+=(-Xswiftc -F -Xswiftc "$testing_frameworks")
+    extra_flags+=(-Xlinker -F -Xlinker "$testing_frameworks")
+    extra_flags+=(-Xlinker -rpath -Xlinker "$testing_frameworks")
+    # Some releases ship _Testing_Foundation.framework without its Swift module, which breaks any
+    # test file importing both Testing and Foundation. The overlay only adds conveniences.
+    if [ ! -d "$testing_frameworks/_Testing_Foundation.framework/Modules" ]; then
+        extra_flags+=(-Xswiftc -Xfrontend -Xswiftc -disable-cross-import-overlays)
+    fi
+fi
+
+case "${1:-}" in
+    build | test | run)
+        subcommand="$1"
+        shift
+        exec swift "$subcommand" ${extra_flags[@]+"${extra_flags[@]}"} "$@"
+        ;;
+    *)
+        exec swift "$@"
+        ;;
+esac

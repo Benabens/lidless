@@ -1,0 +1,8 @@
+.build/
+dist/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+.swiftpm/
+.DS_Store
+*.lidless.bak
