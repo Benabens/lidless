@@ -80,23 +80,30 @@ public struct Outcome: Equatable, Sendable {
     public var switches: Switches
     /// Live sessions of tracked agents, in menu order.
     public var sessions: [SessionRecord]
-    /// Records whose process is gone; their files can be deleted.
-    public var deadSessionIDs: [String]
+    /// Records to delete: the process is gone, or the session sat idle for `idleRetention`.
+    public var staleSessionIDs: [String]
     public var state: EngineState
 }
 
 /// Decides, from a snapshot of the world, whether the Mac should be kept awake.
 /// Pure: same input, same outcome. All side effects live in the app.
 public enum Reconciler {
+    /// Idle sessions are forgotten after this long. A later event simply records them again.
+    public static let idleRetention: TimeInterval = 24 * 3600
+
     public static func reconcile(_ input: ReconcilerInput) -> Outcome {
         let settings = input.settings
         let now = input.now
         var state = input.state
         var switches = input.switches
 
-        let deadSessionIDs = input.sessions.filter { !$0.isAlive }.map(\.record.id)
+        let isStale = { (session: ObservedSession) in
+            !session.isAlive || (session.record.state == .idle
+                && now.timeIntervalSince(session.record.updatedAt) >= idleRetention)
+        }
+        let staleSessionIDs = input.sessions.filter(isStale).map(\.record.id)
         let live = input.sessions
-            .filter { $0.isAlive && settings.trackedAgents.contains($0.record.agent) }
+            .filter { !isStale($0) && settings.trackedAgents.contains($0.record.agent) }
             .map(\.record)
 
         // Who is really working: not stalled, and not a turn the safety cap already gave up on.
@@ -178,7 +185,7 @@ public enum Reconciler {
             status: status,
             switches: switches,
             sessions: live.sorted(by: menuOrder),
-            deadSessionIDs: deadSessionIDs,
+            staleSessionIDs: staleSessionIDs,
             state: state
         )
     }

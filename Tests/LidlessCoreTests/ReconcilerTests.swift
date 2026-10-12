@@ -99,8 +99,15 @@ struct ReconcilerDemandTests {
     @Test func ignoresAndReportsSessionsWhoseProcessDied() {
         let outcome = reconcile(at: 30, [session("ghost", working: 0, alive: false)])
         #expect(outcome.keepAwake == false)
-        #expect(outcome.deadSessionIDs == ["ghost"])
+        #expect(outcome.staleSessionIDs == ["ghost"])
         #expect(outcome.sessions.isEmpty)
+    }
+
+    @Test func forgetsSessionsThatHaveBeenIdleForADay() {
+        // Not every agent announces the end of a session; idle records must not pile up.
+        let outcome = reconcile(at: 24 * 3600, [session("left-open", idle: 0), session("recent", idle: 23 * 3600)])
+        #expect(outcome.staleSessionIDs == ["left-open"])
+        #expect(outcome.sessions.map(\.id) == ["recent"])
     }
 
     @Test func ignoresAgentsTheUserDoesNotTrack() {
@@ -109,7 +116,7 @@ struct ReconcilerDemandTests {
         let outcome = reconcile(at: 30, [session("cx", agent: .codex, working: 0)], settings: settings)
         #expect(outcome.keepAwake == false)
         #expect(outcome.sessions.isEmpty)
-        #expect(outcome.deadSessionIDs.isEmpty)
+        #expect(outcome.staleSessionIDs.isEmpty)
     }
 
     @Test func listsWorkingSessionsFirstThenMostRecent() {
