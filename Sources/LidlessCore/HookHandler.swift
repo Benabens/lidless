@@ -113,10 +113,27 @@ public struct HookPayload: Equatable, Sendable {
 
     /// Never fails: a payload Lidless cannot read just carries no information.
     public static func parse(_ data: Data) -> HookPayload {
-        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        func string(_ key: String) -> String? {
-            (object?[key] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            func string(_ key: String) -> String? {
+                (object[key] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            }
+            return HookPayload(sessionID: string("session_id"), cwd: string("cwd"))
         }
-        return HookPayload(sessionID: string("session_id"), cwd: string("cwd"))
+        // Not valid JSON, most likely cut short: the fields we need come first, so scan for them.
+        let text = String(decoding: data, as: UTF8.self)
+        return HookPayload(sessionID: scan(text, for: "session_id"), cwd: scan(text, for: "cwd"))
+    }
+
+    /// The first `"key": "value"` in `text`, with the value's JSON escapes resolved.
+    private static func scan(_ text: String, for key: String) -> String? {
+        let pattern = "\"\(key)\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\")"
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text),
+              let value = try? JSONSerialization.jsonObject(
+                  with: Data(text[range].utf8), options: .fragmentsAllowed
+              ) as? String
+        else { return nil }
+        return value.isEmpty ? nil : value
     }
 }

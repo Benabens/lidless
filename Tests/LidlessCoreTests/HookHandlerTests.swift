@@ -211,4 +211,35 @@ struct HookPayloadTests {
         #expect(HookPayload.parse(Data(#"{"session_id":42,"cwd":""}"#.utf8)) == HookPayload(sessionID: nil, cwd: nil))
         #expect(HookPayload.parse(Data("[1,2]".utf8)) == HookPayload(sessionID: nil, cwd: nil))
     }
+
+    @Test func stillFindsTheSessionIDInAPayloadCutShort() {
+        // Tool results can make a payload huge; the hook stops reading at some point.
+        let truncated = #"{"session_id":"8f2c","cwd":"/Users/me/app","tool_response":{"stdout":"lorem ips"#
+        let payload = HookPayload.parse(Data(truncated.utf8))
+        #expect(payload == HookPayload(sessionID: "8f2c", cwd: "/Users/me/app"))
+    }
+
+    @Test func unescapesPathsWhenReadingACutShortPayload() {
+        let truncated = #"{"session_id" : "id-1", "cwd": "/Users/me/my \"quoted\" dir\/x", "prompt": "unfinis"#
+        let payload = HookPayload.parse(Data(truncated.utf8))
+        #expect(payload.sessionID == "id-1")
+        #expect(payload.cwd == #"/Users/me/my "quoted" dir/x"#)
+    }
+}
+
+@Suite("Where Lidless keeps its files")
+struct LidlessPathsTests {
+    @Test func livesInApplicationSupportByDefault() {
+        let paths = LidlessPaths(home: URL(fileURLWithPath: "/Users/me"), environment: [:])
+        #expect(paths.supportDirectory.path == "/Users/me/Library/Application Support/Lidless")
+        #expect(paths.sessionsDirectory.path == "/Users/me/Library/Application Support/Lidless/sessions")
+        #expect(paths.installedHook.path == "/Users/me/Library/Application Support/Lidless/bin/lidless-hook")
+    }
+
+    @Test func canBeRedirectedForTestsAndSandboxes() {
+        let paths = LidlessPaths(
+            home: URL(fileURLWithPath: "/Users/me"), environment: ["LIDLESS_SUPPORT_DIR": "/tmp/elsewhere"]
+        )
+        #expect(paths.sessionsDirectory.path == "/tmp/elsewhere/sessions")
+    }
 }
