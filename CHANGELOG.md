@@ -22,6 +22,10 @@ First version.
   or at the awake limit, with a notification when a safety rule cuts a run short. Backed by an
   optional sudoers rule limited to two `pmset` commands, and a watchdog that restores sleep if the
   app dies or freezes.
-- "Keep Awake Anyway", open at login, and a settings window.
+- "Keep Awake For": a timer from 15 minutes to 4 hours, open-ended, or a typed duration, which
+  holds the Mac awake whether or not an agent is working, optionally with the lid closed, with the
+  time left in the menu or next to the icon.
+- Open at login (turned on the first time the lid-closed switch is used), and a settings window.
+- Measured performance in `docs/PERFORMANCE.md`, with the scripts to reproduce it in `scripts/perf/`.
 - `scripts/bundle.sh` to build a universal `Lidless.app`, and `scripts/swiftw` to build with a
   Command Line Tools install that an in-place update left broken.

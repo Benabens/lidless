@@ -8,7 +8,7 @@ Start a long agent run, close the lid, put the Mac in your bag. When the last ag
 
 1. Each agent calls a tiny executable, `lidless-hook`, from its own hooks: when a session starts, when you submit a prompt, when it uses a tool, when the turn ends.
 2. `lidless-hook` records that as one small JSON file per session in `~/Library/Application Support/Lidless/sessions/`.
-3. The app watches that folder and decides, every time something changes and every 10 seconds, whether the Mac needs to stay awake.
+3. The app watches that folder and decides, every time something changes, whether the Mac needs to stay awake. It only checks on a timer (every 10 seconds) while an agent is working or a timer is running; with nothing going on it does not wake the CPU at all.
 
 While at least one session is working, Lidless holds a `PreventUserIdleSystemSleep` power assertion. That blocks system sleep only: **the display still turns off on its usual schedule.**
 
@@ -19,9 +19,18 @@ The decision is a pure function with a full test suite, and it errs on the side 
 | Stay awake a little after the last turn, so back-to-back turns and scripted runs do not race sleep | 2 minutes |
 | A session whose process died no longer counts | always |
 | A working session that sends no event for a while is treated as idle (agents do not report an interrupted turn) | 30 minutes |
-| Hard ceiling on one uninterrupted stretch of wakefulness | 6 hours |
+| Hard ceiling on one uninterrupted stretch of wakefulness (a timer you set is its own limit) | 6 hours |
 | Stop keeping awake when the battery drops below a level | 20% |
 | Only keep awake on the power adapter | off |
+
+## Keep awake for a while
+
+Not everything is an agent. **Keep Awake For** in the menu holds the Mac awake for 15 minutes to 4 hours, until you turn it off, or for a duration you type (`45`, `1h30`, `2:15`, up to 24 hours), whether or not an agent is working.
+
+- The menu shows the time left, and **Show the timer in the menu bar** in Settings puts it next to the icon.
+- **Stop** ends it at once. When it ends by itself you get a quiet notification; if an agent is still working, Lidless simply goes on following it.
+- **Also with Lid Closed** extends the hold to a closed lid, through the same `pmset` switch as closed-lid mode and under the same guards: battery level, heat, the watchdog. It needs the same one-time setup.
+- A timer is its own limit, so the awake limit does not cut it short. *Until I Turn It Off* has no end of its own and stays subject to it.
 
 ## Requirements
 
@@ -107,13 +116,22 @@ Be clear about what you are agreeing to:
 
 ## Limitations
 
-- If the Mac restarts or is powered off hard while closed-lid mode is active, sleep stays disabled until Lidless starts again, which in a bag means a Mac that cannot sleep. Turn on *Open at login* if you use closed-lid mode; `sudo pmset -a disablesleep 0` fixes it by hand.
+- If the Mac restarts or is powered off hard while sleep is disabled, it stays disabled until Lidless starts again, which in a bag means a Mac that cannot sleep. That is why Lidless turns on **Open at login** the first time you use the lid closed; leave it on. Before you log in again nothing can fix it automatically, and `sudo pmset -a disablesleep 0` does it by hand.
 - The thermal rule relies on what macOS reports. It reacts to the Mac running hot, not to how warm the bag is.
 - An agent turn you interrupt is not reported by the agents. Lidless notices after the silent-agent timeout (30 minutes by default), or immediately if you quit the agent.
 - A single tool call that runs longer than that timeout without any other activity looks the same as a stuck session. Raise the timeout, or set it to *Never*, if your runs do that.
 - The awake limit also stops legitimate long runs. Raise it if you need more than 6 hours.
 - Lidless does not stop sleep you ask for (Apple menu → Sleep), nor sleep forced by macOS (critically low battery, overheating).
 - Codex does not announce the end of a session on every version; such sessions disappear when the process exits or after a day idle.
+
+## Performance
+
+Measured on an M3 Pro, details and method in [docs/PERFORMANCE.md](docs/PERFORMANCE.md):
+
+- `lidless-hook` takes about 5 ms per call (1.6 ms of which is starting a process), and prints nothing, ever: nothing of it lands in an agent's context.
+- At rest the app uses 0.005% of a CPU and wakes it about 3 times a minute. It does not poll: the 10-second check only runs while an agent is working or a timer is running.
+- With three agents working, each calling a tool every 2 seconds: 0.04% of a CPU, 0.2 wake-ups per second.
+- 14 MB of memory. The universal bundle is 3.9 MB (2 MB zipped).
 
 ## Uninstall
 
@@ -128,6 +146,8 @@ swift build
 swift test
 ./scripts/bundle.sh --native   # quick bundle for this Mac only
 ```
+
+To try the whole app without touching a real agent configuration, point it at a throwaway home: `LIDLESS_HOME=/tmp/pretend-home LIDLESS_SUPPORT_DIR=/tmp/lidless-support dist/Lidless.app/Contents/MacOS/Lidless`.
 
 - `Sources/LidlessCore` — all the logic, no AppKit: the reconciler, session files, the order-preserving JSON merge, the sudoers rule. This is what the tests cover.
 - `Sources/Lidless` — the menu bar app (AppKit, SwiftUI for settings).
