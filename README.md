@@ -59,10 +59,6 @@ swift build && swift test
 
 Everything that decides anything lives in `Sources/LidlessCore`, without AppKit and under test. If `swift build` fails before compiling anything, see [Building it](docs/HOW-IT-WORKS.md#building-it). The logo and its usage guide are in [design/logo](design/logo).
 
-## Prior art
-
-Lidless was inspired by [insomnia](https://github.com/phin/insomnia) by phin (MIT), which had the idea of tying wakefulness to agent activity. Lidless shares no code with it. Related tools: Amphetamine, the built-in `caffeinate`, Adrafinil and LidAwake.
-
 ## License
 
 [MIT](LICENSE) © 2026 Ben (Benabens)
