@@ -169,6 +169,7 @@ final class AppModel: ObservableObject {
             ))
         }
 
+        let hadOpenEndedHold = switches.manualHold != nil && switches.manualHold?.until == nil
         var result = pass()
         var lidResult = lidSleep.apply(disableLidSleep: result.disableLidSleep)
         var notice = result.lidDisarmReason.map { "Closed-lid mode turned itself off: \(explain($0))." }
@@ -178,8 +179,10 @@ final class AppModel: ObservableObject {
         }
 
         if result.disableLidSleep, lidResult == .failed {
-            // pmset refused, so there is nothing to arm: switch it off and decide again.
+            // pmset refused, so nothing can hold the lid: switch both lid options off and decide
+            // again, rather than asking pmset over and over.
             switches.lidArmed = false
+            switches.manualHold?.withLidClosed = false
             result = pass()
             lidResult = lidSleep.apply(disableLidSleep: false)
             notice = "Closed-lid mode could not change the sleep setting. Check the rule in Settings."
@@ -195,9 +198,12 @@ final class AppModel: ObservableObject {
                     : "Your Mac can sleep again."
             )
         }
-        if let reason = result.timerLidStopReason {
-            let explanation = "the timer no longer holds with the lid closed: \(explain(reason))"
-            notice = "Lidless stepped in: \(explanation)."
+        if hadOpenEndedHold, result.switches.manualHold == nil, !result.timerExpired {
+            // Only the awake limit ends an open-ended hold without the user's doing.
+            notice = "Lidless stopped keeping the Mac awake: \(explain(.capReached))."
+            UserNotifier.post(title: "Keep-awake ended", body: capitalized(explain(.capReached)) + ".")
+        } else if let reason = result.timerLidStopReason {
+            notice = "The timer no longer holds with the lid closed: \(explain(reason))."
             UserNotifier.post(title: "Lid-closed timer turned off", body: capitalized(explain(reason)) + ".")
         }
 
