@@ -4,9 +4,9 @@ All notable changes to Lidless are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-13
 
-First version.
+First release.
 
 ### Added
 
@@ -26,6 +26,7 @@ First version.
   holds the Mac awake whether or not an agent is working, optionally with the lid closed, with the
   time left in the menu or next to the icon.
 - Open at login (turned on the first time the lid-closed switch is used), and a settings window.
+- A logo, with its kit and usage guide in `design/logo/`.
 - Measured performance in `docs/PERFORMANCE.md`, with the scripts to reproduce it in `scripts/perf/`.
 - `scripts/bundle.sh` to build a universal `Lidless.app`, and `scripts/swiftw` to build with a
   Command Line Tools install that an in-place update left broken.
