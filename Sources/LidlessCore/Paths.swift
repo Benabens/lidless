@@ -3,8 +3,11 @@ import Foundation
 /// Where Lidless keeps its files.
 public struct LidlessPaths: Sendable {
     public let supportDirectory: URL
+    /// The home directory whose agent configurations Lidless reads and edits.
+    public let agentsHome: URL
 
-    /// `LIDLESS_SUPPORT_DIR` overrides the default location, for tests and sandboxes.
+    /// Two overrides exist for tests and for trying the app without touching anything real:
+    /// `LIDLESS_SUPPORT_DIR` moves Lidless's own files, `LIDLESS_HOME` the agents' home.
     public init(
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -13,6 +16,11 @@ public struct LidlessPaths: Sendable {
             supportDirectory = URL(fileURLWithPath: override, isDirectory: true)
         } else {
             supportDirectory = home.appendingPathComponent("Library/Application Support/Lidless", isDirectory: true)
+        }
+        if let override = environment["LIDLESS_HOME"], !override.isEmpty {
+            agentsHome = URL(fileURLWithPath: override, isDirectory: true)
+        } else {
+            agentsHome = home
         }
     }
 

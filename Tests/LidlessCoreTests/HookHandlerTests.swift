@@ -235,6 +235,14 @@ struct LidlessPathsTests {
         #expect(paths.installedHook.path == "/Users/me/Library/Application Support/Lidless/bin/lidless-hook")
     }
 
+    @Test func looksForAgentsInTheRealHomeUnlessToldOtherwise() {
+        let home = URL(fileURLWithPath: "/Users/me")
+        #expect(LidlessPaths(home: home, environment: [:]).agentsHome.path == "/Users/me")
+        // Lets the whole app be tried against a throwaway home, real agent configurations untouched.
+        #expect(LidlessPaths(home: home, environment: ["LIDLESS_HOME": "/tmp/pretend"]).agentsHome.path == "/tmp/pretend")
+        #expect(LidlessPaths(home: home, environment: ["LIDLESS_HOME": ""]).agentsHome.path == "/Users/me")
+    }
+
     @Test func canBeRedirectedForTestsAndSandboxes() {
         let paths = LidlessPaths(
             home: URL(fileURLWithPath: "/Users/me"), environment: ["LIDLESS_SUPPORT_DIR": "/tmp/elsewhere"]

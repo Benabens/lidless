@@ -313,18 +313,22 @@ final class AppModel: ObservableObject {
     func refreshIntegrations() {
         var statuses: [Agent: AgentIntegration.Status] = [:]
         for agent in Agent.allCases {
-            statuses[agent] = AgentIntegration(agent: agent).status(hookPath: paths.installedHook.path)
+            statuses[agent] = integration(for: agent).status(hookPath: paths.installedHook.path)
         }
         integrationStatus = statuses
-        codexHasInlineHooks = AgentIntegration(agent: .codex).hasInlineCodexHooks
+        codexHasInlineHooks = integration(for: .codex).hasInlineCodexHooks
 
         // An agent is followed exactly when Lidless's hooks are in its configuration.
         let tracked = Set(statuses.filter(\.value.isConnected).keys)
         if settings.trackedAgents != tracked { settings.trackedAgents = tracked }
     }
 
+    func integration(for agent: Agent) -> AgentIntegration {
+        AgentIntegration(agent: agent, home: paths.agentsHome)
+    }
+
     func setIntegration(_ agent: Agent, enabled: Bool) {
-        let integration = AgentIntegration(agent: agent)
+        let integration = integration(for: agent)
         do {
             if enabled {
                 HookProvisioner.provision(to: paths.installedHook)

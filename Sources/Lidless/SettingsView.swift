@@ -54,7 +54,7 @@ struct SettingsView: View {
     }
 
     private func caption(for agent: Agent, status: AgentIntegration.Status) -> String {
-        let file = (AgentIntegration(agent: agent).configFile.path as NSString).abbreviatingWithTildeInPath
+        let file = (model.integration(for: agent).configFile.path as NSString).abbreviatingWithTildeInPath
         switch status {
         case .agentNotFound: return "Not found on this Mac"
         case .notInstalled: return "Not connected"
