@@ -8,7 +8,6 @@ import LidlessCore
 // for the Lidless app to pick up. A hook must never get in the agent's way, so this prints nothing
 // on stdout (agents read it), never blocks on stdin, and always exits 0.
 
-let version = "0.1.0"
 let usage = "usage: lidless-hook <claude|codex|gemini> <start|prompt|activity|stop|end> [--pid <pid>]\n"
 
 /// Reads the agent's JSON payload. Gives up after a second of silence in case stdin is left open.
@@ -28,7 +27,7 @@ func readStandardInput(limit: Int = 32 << 20) -> Data {
 
 var arguments = Array(CommandLine.arguments.dropFirst())
 if arguments == ["--version"] {
-    print(version)
+    print(Lidless.version)
     exit(0)
 }
 
