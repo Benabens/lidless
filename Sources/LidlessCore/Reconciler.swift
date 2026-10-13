@@ -81,8 +81,8 @@ public enum Status: Equatable, Sendable {
     case working(count: Int)
     /// Every agent finished; staying awake until the grace period runs out.
     case grace(until: Date)
-    /// Only "Keep Awake Anyway" holds the Mac awake.
-    case manual
+    /// Only the user's own hold keeps the Mac awake: a timer, or open-ended when `until` is `nil`.
+    case manual(until: Date?)
     case suppressed(SuppressReason)
 }
 
@@ -93,6 +93,13 @@ public struct Outcome: Equatable, Sendable {
     public var disableLidSleep: Bool
     /// Set on the pass where closed-lid mode disarms itself.
     public var lidDisarmReason: LidDisarmReason?
+    /// Set on the pass where a guard switches off the lid-closed option of the user's hold.
+    public var timerLidStopReason: LidDisarmReason?
+    /// The user's timer ran out on this pass.
+    public var timerExpired: Bool
+    /// Something may change with time alone (a working session, a grace period, a timer), so the
+    /// caller should run passes periodically. Otherwise passes on external events are enough.
+    public var needsPolling: Bool
     public var status: Status
     /// The switches after this pass: the reconciler turns them off when a safety rule fires.
     public var switches: Switches
@@ -151,13 +158,21 @@ public enum Reconciler {
         let capStillApplies = trippedAt != nil && (working.count < active.count || (graceEnd != nil && graceUntil == nil))
         if !capStillApplies { state.capTrippedAt = nil }
 
+        // The user's own hold, which ends by itself when it is a timer.
+        var timerExpired = false
+        if let until = switches.manualHold?.until, until <= now {
+            switches.manualHold = nil
+            timerExpired = true
+        }
+        let hold = switches.manualHold
+
         var status: Status
         if !working.isEmpty {
             status = .working(count: working.count)
         } else if let graceUntil {
             status = .grace(until: graceUntil)
-        } else if switches.keepAwakeAnyway {
-            status = .manual
+        } else if let hold {
+            status = .manual(until: hold.until)
         } else if capStillApplies {
             status = .suppressed(.capReached)
         } else {
@@ -170,12 +185,17 @@ public enum Reconciler {
         case .working, .grace, .manual:
             if let reason = powerSuppression(input.power, settings: settings) {
                 status = .suppressed(reason)
+            } else if hold?.until != nil {
+                // A timer is its own limit. The cap guards open-ended wakefulness, and starts
+                // counting afresh once the timer is over.
+                keepAwake = true
+                state.awakeSince = nil
             } else {
                 let since = state.awakeSince ?? now
                 if now.timeIntervalSince(since) >= settings.maxAwakeDuration {
                     state.capTrippedAt = now
                     capTrippedNow = true
-                    switches.keepAwakeAnyway = false
+                    switches.manualHold = nil
                     status = .suppressed(.capReached)
                 } else {
                     state.awakeSince = since
@@ -187,12 +207,13 @@ public enum Reconciler {
         }
         if !keepAwake { state.awakeSince = nil }
 
-        // Closed-lid mode follows the agents only: "Keep Awake Anyway" never engages it. Real
-        // work engages it; the grace period merely keeps it engaged.
+        // Closed-lid mode follows the agents: real work engages it, and the grace period merely
+        // keeps it engaged. The user's hold has its own lid option, handled below.
+        let obstacle = lidObstacle(power: input.power, settings: settings, thermal: input.thermal)
         var disableLidSleep = false
         var lidDisarmReason: LidDisarmReason?
         if switches.lidArmed {
-            if let obstacle = lidObstacle(power: input.power, settings: settings, thermal: input.thermal) {
+            if let obstacle {
                 lidDisarmReason = obstacle
             } else if capTrippedNow {
                 lidDisarmReason = .capReached
@@ -206,10 +227,26 @@ public enum Reconciler {
         }
         if !switches.lidArmed { state.lidEngaged = false }
 
+        // The hold's lid option obeys the same guards, but ends with the hold, not with the agents.
+        var timerLidStopReason: LidDisarmReason?
+        if hold?.withLidClosed == true {
+            if capTrippedNow {
+                timerLidStopReason = .capReached
+            } else if let obstacle {
+                switches.manualHold?.withLidClosed = false
+                timerLidStopReason = obstacle
+            } else if keepAwake {
+                disableLidSleep = true
+            }
+        }
+
         return Outcome(
             keepAwake: keepAwake,
             disableLidSleep: disableLidSleep,
             lidDisarmReason: lidDisarmReason,
+            timerLidStopReason: timerLidStopReason,
+            timerExpired: timerExpired,
+            needsPolling: !active.isEmpty || graceEnd != nil || switches.manualHold != nil,
             status: status,
             switches: switches,
             sessions: live.sorted(by: menuOrder),

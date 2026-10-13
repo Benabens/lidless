@@ -183,10 +183,10 @@ struct ReconcilerSafetyTests {
         #expect(outcome.keepAwake == true)
     }
 
-    @Test func keepAwakeAnywayHoldsWithoutAnyAgent() {
-        let outcome = reconcile(at: 0, switches: Switches(keepAwakeAnyway: true))
+    @Test func anOpenEndedHoldKeepsTheMacAwakeWithoutAnyAgent() {
+        let outcome = reconcile(at: 0, switches: Switches(manualHold: ManualHold(until: nil)))
         #expect(outcome.keepAwake == true)
-        #expect(outcome.status == .manual)
+        #expect(outcome.status == .manual(until: nil))
     }
 
     @Test func acOnlyReleasesOnBatteryAndResumesWhenPluggedBackIn() {
@@ -284,7 +284,7 @@ struct ReconcilerSafetyTests {
         #expect(over.state.capTrippedAt == nil)
     }
 
-    @Test func theSafetyCapReleasesEverythingAndTurnsOffKeepAwakeAnyway() {
+    @Test func theSafetyCapReleasesEverythingIncludingAnOpenEndedHold() {
         var settings = LidlessSettings()
         settings.maxAwakeDuration = 6 * 3600
         settings.stallTimeout = 0
@@ -293,11 +293,11 @@ struct ReconcilerSafetyTests {
 
         let outcome = reconcile(
             at: 6 * 3600, [session(working: 0)],
-            settings: settings, switches: Switches(keepAwakeAnyway: true), state: state
+            settings: settings, switches: Switches(manualHold: ManualHold(until: nil)), state: state
         )
         #expect(outcome.keepAwake == false)
         #expect(outcome.status == .suppressed(.capReached))
-        #expect(outcome.switches.keepAwakeAnyway == false)
+        #expect(outcome.switches.manualHold == nil)
         #expect(outcome.state.awakeSince == nil)
     }
 
@@ -568,8 +568,8 @@ struct ReconcilerLidTests {
         #expect(capped.lidDisarmReason == .capReached)
     }
 
-    @Test func keepAwakeAnywayAloneDoesNotEngageLidMode() {
-        let outcome = reconcile(at: 0, switches: Switches(keepAwakeAnyway: true, lidArmed: true))
+    @Test func aHoldWithoutItsLidOptionDoesNotEngageTheAgentsLidSwitch() {
+        let outcome = reconcile(at: 0, switches: Switches(manualHold: ManualHold(until: nil), lidArmed: true))
         #expect(outcome.keepAwake == true)
         #expect(outcome.disableLidSleep == false)
         #expect(outcome.switches.lidArmed == true)
@@ -589,5 +589,170 @@ struct ReconcilerLidTests {
         #expect(reArmed.switches.lidArmed == true)
         #expect(reArmed.disableLidSleep == false)
         #expect(reArmed.lidDisarmReason == nil)
+    }
+}
+
+@Suite("Reconciler — keep awake for a while, agents or not")
+struct ReconcilerTimerTests {
+    private let onBattery = PowerState(isOnAC: false, batteryPercent: 80)
+
+    private func timer(until seconds: TimeInterval?, lidClosed: Bool = false) -> Switches {
+        Switches(manualHold: ManualHold(until: seconds.map(at), withLidClosed: lidClosed))
+    }
+
+    @Test func aTimerKeepsTheMacAwakeWithoutAnyAgent() {
+        let outcome = reconcile(at: 10, switches: timer(until: 900))
+        #expect(outcome.keepAwake == true)
+        #expect(outcome.status == .manual(until: at(900)))
+        #expect(outcome.timerExpired == false)
+    }
+
+    @Test func theTimerEndsOnItsOwnAndSaysSoOnce() {
+        let running = reconcile(at: 890, switches: timer(until: 900))
+        let ended = reconcile(at: 900, switches: running.switches, state: running.state)
+        #expect(ended.keepAwake == false)
+        #expect(ended.status == .idle)
+        #expect(ended.switches.manualHold == nil)
+        #expect(ended.timerExpired == true)
+
+        let after = reconcile(at: 910, switches: ended.switches, state: ended.state)
+        #expect(after.timerExpired == false)
+    }
+
+    @Test func whenTheTimerEndsAnAgentStillWorkingKeepsTheMacAwake() {
+        let ended = reconcile(at: 100, [session(working: 50, lastEvent: 95)], switches: timer(until: 100))
+        #expect(ended.timerExpired == true)
+        #expect(ended.keepAwake == true)
+        #expect(ended.status == .working(count: 1))
+    }
+
+    @Test func aTimerIsItsOwnLimitAndIgnoresTheAwakeCap() {
+        // The cap guards against wakefulness nobody decided on. A four-hour timer was decided on.
+        var settings = LidlessSettings()
+        settings.maxAwakeDuration = 3600
+        var state = EngineState()
+        state.awakeSince = at(0)
+
+        let outcome = reconcile(at: 2 * 3600, settings: settings, switches: timer(until: 4 * 3600), state: state)
+        #expect(outcome.keepAwake == true)
+        #expect(outcome.switches.manualHold != nil)
+        #expect(outcome.state.capTrippedAt == nil)
+    }
+
+    @Test func theCapStartsCountingOnceTheTimerIsOver() {
+        var settings = LidlessSettings()
+        settings.maxAwakeDuration = 3600
+        settings.stallTimeout = 0
+        let busy = [session(working: 0)]
+        let duringTimer = reconcile(at: 7000, busy, settings: settings, switches: timer(until: 7200))
+
+        let afterTimer = reconcile(at: 7200, busy, settings: settings, switches: duringTimer.switches, state: duringTimer.state)
+        #expect(afterTimer.keepAwake == true)
+        #expect(afterTimer.state.awakeSince == at(7200))
+    }
+
+    @Test func powerAdapterOnlyAppliesToTheTimerToo() {
+        var settings = LidlessSettings()
+        settings.acOnly = true
+        let outcome = reconcile(at: 10, power: onBattery, settings: settings, switches: timer(until: 900))
+        #expect(outcome.keepAwake == false)
+        #expect(outcome.status == .suppressed(.onBattery))
+        #expect(outcome.switches.manualHold != nil)
+    }
+
+    @Test func aPlainTimerLeavesLidSleepAlone() {
+        let outcome = reconcile(at: 10, switches: timer(until: 900))
+        #expect(outcome.disableLidSleep == false)
+    }
+
+    @Test func aTimerCanAlsoHoldWithTheLidClosedOnBatteryIncluded() {
+        let outcome = reconcile(at: 10, power: onBattery, switches: timer(until: 900, lidClosed: true))
+        #expect(outcome.keepAwake == true)
+        #expect(outcome.disableLidSleep == true)
+        #expect(outcome.timerLidStopReason == nil)
+    }
+
+    @Test func whenALidClosedTimerEndsSleepComesBack() {
+        let running = reconcile(at: 890, switches: timer(until: 900, lidClosed: true))
+        #expect(running.disableLidSleep == true)
+
+        let ended = reconcile(at: 900, switches: running.switches, state: running.state)
+        #expect(ended.disableLidSleep == false)
+        #expect(ended.timerExpired == true)
+    }
+
+    @Test func aLowBatteryTurnsTheTimersLidOptionOff() {
+        let low = PowerState(isOnAC: false, batteryPercent: 19)
+        let outcome = reconcile(at: 10, power: low, switches: timer(until: 900, lidClosed: true))
+        #expect(outcome.disableLidSleep == false)
+        #expect(outcome.timerLidStopReason == .lowBattery)
+        #expect(outcome.switches.manualHold?.withLidClosed == false)
+        #expect(outcome.keepAwake == false)
+    }
+
+    @Test func heatTurnsTheTimersLidOptionOffButTheTimerGoesOn() {
+        let outcome = reconcile(at: 10, switches: timer(until: 900, lidClosed: true), thermal: .serious)
+        #expect(outcome.disableLidSleep == false)
+        #expect(outcome.timerLidStopReason == .overheating)
+        #expect(outcome.switches.manualHold == ManualHold(until: at(900), withLidClosed: false))
+        #expect(outcome.keepAwake == true)
+    }
+
+    @Test func theCapEndsAnOpenEndedLidClosedHoldAndSaysWhy() {
+        var settings = LidlessSettings()
+        settings.maxAwakeDuration = 3600
+        var state = EngineState()
+        state.awakeSince = at(0)
+
+        let outcome = reconcile(at: 3600, settings: settings, switches: timer(until: nil, lidClosed: true), state: state)
+        #expect(outcome.disableLidSleep == false)
+        #expect(outcome.switches.manualHold == nil)
+        #expect(outcome.timerLidStopReason == .capReached)
+    }
+
+    @Test func theTimersLidOptionAndTheAgentsSwitchAreIndependent() {
+        // The timer ends; the armed switch keeps the lid-closed run of a working agent going.
+        let switches = Switches(manualHold: ManualHold(until: at(100), withLidClosed: true), lidArmed: true)
+        let ended = reconcile(at: 100, [session(working: 50, lastEvent: 95)], switches: switches)
+        #expect(ended.timerExpired == true)
+        #expect(ended.disableLidSleep == true)
+        #expect(ended.switches.lidArmed == true)
+    }
+}
+
+@Suite("Reconciler — only poll while something can change by itself")
+struct ReconcilerPollingTests {
+    @Test func nothingToWatchMeansNoPolling() {
+        #expect(reconcile(at: 0).needsPolling == false)
+        #expect(reconcile(at: 1000, [session(idle: 100)]).needsPolling == false)
+        #expect(reconcile(at: 1000, [session(idle: nil)], switches: Switches(lidArmed: true)).needsPolling == false)
+    }
+
+    @Test func pollsWhileAnAgentWorksAndThroughTheGracePeriod() {
+        #expect(reconcile(at: 30, [session(working: 0)]).needsPolling == true)
+        #expect(reconcile(at: 150, [session(idle: 100)]).needsPolling == true)
+    }
+
+    @Test func pollsWhileATimerRuns() {
+        let hold = Switches(manualHold: ManualHold(until: at(900)))
+        #expect(reconcile(at: 10, switches: hold).needsPolling == true)
+        #expect(reconcile(at: 900, switches: hold).needsPolling == false)
+    }
+
+    @Test func aSilentSessionIsNotWorthPollingFor() {
+        var settings = LidlessSettings()
+        settings.stallTimeout = 30 * 60
+        let outcome = reconcile(at: 3 * 3600, [session(working: 0, lastEvent: 60)], settings: settings)
+        #expect(outcome.needsPolling == false)
+    }
+
+    @Test func keepsPollingWhileTheCapHoldsAStuckSessionBack() {
+        var settings = LidlessSettings()
+        settings.maxAwakeDuration = 3600
+        settings.stallTimeout = 0
+        var state = EngineState()
+        state.awakeSince = at(0)
+        let tripped = reconcile(at: 3600, [session(working: 0)], settings: settings, state: state)
+        #expect(tripped.needsPolling == true)
     }
 }

@@ -138,9 +138,11 @@ struct SettingsView: View {
 
     private var generalSection: some View {
         Section {
-            Toggle("Open at login", isOn: Binding(
-                get: { model.opensAtLogin }, set: { model.setOpensAtLogin($0) }
-            ))
+            Toggle(isOn: Binding(get: { model.opensAtLogin }, set: { model.setOpensAtLogin($0) })) {
+                Text("Open at login")
+                Text("Turned on the first time you use the lid closed: after a restart, only Lidless can turn sleep back on")
+            }
+            Toggle("Show the timer in the menu bar", isOn: $model.showsTimerInMenuBar)
             if let error = model.loginItemError {
                 problem(error)
             }

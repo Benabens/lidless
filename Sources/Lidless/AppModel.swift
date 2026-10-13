@@ -34,6 +34,15 @@ final class AppModel: ObservableObject {
     @Published private(set) var opensAtLogin = false
     @Published private(set) var loginItemError: String?
 
+    /// "Also with Lid Closed": applies to the running hold and to the next ones.
+    @Published private(set) var holdWithLidClosed = UserDefaults.standard.bool(forKey: "holdWithLidClosed")
+    @Published var showsTimerInMenuBar = UserDefaults.standard.bool(forKey: "showsTimerInMenuBar") {
+        didSet {
+            UserDefaults.standard.set(showsTimerInMenuBar, forKey: "showsTimerInMenuBar")
+            onUpdate?()
+        }
+    }
+
     /// Called after every pass so the status item can refresh.
     var onUpdate: (() -> Void)?
     var onOpenSettings: (() -> Void)?
@@ -93,19 +102,30 @@ final class AppModel: ObservableObject {
             MainActor.assumeIsolated { self?.reconcile() }
         }
 
-        let timer = Timer(timeInterval: Self.reconcileInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reconcile() }
-        }
-        timer.tolerance = 1
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-
         reconcile()
+    }
+
+    /// The periodic pass only runs while time alone can change the outcome (an agent working, a
+    /// grace period, a timer) or sleep is disabled. Otherwise Lidless sits on its event sources
+    /// (session files, power, heat, wake) and never wakes the CPU on its own.
+    private func setPolling(_ needed: Bool) {
+        if needed, timer == nil {
+            let timer = Timer(timeInterval: Self.reconcileInterval, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reconcile() }
+            }
+            // Generous on purpose: lets macOS fire it together with other wake-ups.
+            timer.tolerance = 3
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        } else if !needed, let timer {
+            timer.invalidate()
+            self.timer = nil
+        }
     }
 
     /// Leaves the Mac exactly as Lidless found it.
     func shutdown() {
-        timer?.invalidate()
+        setPolling(false)
         watcher.stop()
         powerMonitor.stop()
         if let wakeObserver {
@@ -154,11 +174,7 @@ final class AppModel: ObservableObject {
         var notice = result.lidDisarmReason.map { "Closed-lid mode turned itself off: \(explain($0))." }
         if let reason = result.lidDisarmReason, reason != .workFinished {
             // A safety rule cut the run short while nobody was looking.
-            let explanation = explain(reason)
-            UserNotifier.post(
-                title: "Closed-lid mode turned off",
-                body: explanation.prefix(1).uppercased() + explanation.dropFirst() + "."
-            )
+            UserNotifier.post(title: "Closed-lid mode turned off", body: capitalized(explain(reason)) + ".")
         }
 
         if result.disableLidSleep, lidResult == .failed {
@@ -172,12 +188,29 @@ final class AppModel: ObservableObject {
             notice = "Lidless could not turn sleep back on. Run “sudo pmset -a disablesleep 0” in Terminal."
         }
 
+        if result.timerExpired {
+            UserNotifier.post(
+                title: "Keep-awake timer ended",
+                body: result.keepAwake ? "Agents are still working, so Lidless keeps following them."
+                    : "Your Mac can sleep again."
+            )
+        }
+        if let reason = result.timerLidStopReason {
+            let explanation = "the timer no longer holds with the lid closed: \(explain(reason))"
+            notice = "Lidless stepped in: \(explanation)."
+            UserNotifier.post(title: "Lid-closed timer turned off", body: capitalized(explain(reason)) + ".")
+        }
+
         result.staleSessionIDs.forEach(store.remove)
+        let heldByAgents = if case .manual = result.status { false } else { true }
         assertion.set(
             held: result.keepAwake,
-            reason: result.status == .manual ? "Lidless: kept awake by the user" : "Lidless: a coding agent is working"
+            reason: heldByAgents ? "Lidless: a coding agent is working" : "Lidless: kept awake by the user"
         )
         if lidSleep.ownsTheSetting { watchdog.start() } else { watchdog.stop() }
+        // While sleep is disabled the pass must keep running: it refreshes the watchdog's
+        // heartbeat and retries a restore that failed.
+        setPolling(result.needsPolling || lidSleep.ownsTheSetting)
 
         switches = result.switches
         engineState = result.state
@@ -201,14 +234,57 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func capitalized(_ sentence: String) -> String {
+        sentence.prefix(1).uppercased() + sentence.dropFirst()
+    }
+
     // MARK: - Switches
 
-    var keepAwakeAnyway: Bool { switches.keepAwakeAnyway }
+    var manualHold: ManualHold? { switches.manualHold }
     var lidArmed: Bool { switches.lidArmed }
 
-    func toggleKeepAwakeAnyway() {
-        switches.keepAwakeAnyway.toggle()
+    /// Keeps the Mac awake for `duration`, or until stopped when `nil`, whatever the agents do.
+    func startHold(for duration: TimeInterval?) {
+        switches.manualHold = ManualHold(
+            until: duration.map { Date().addingTimeInterval($0) },
+            withLidClosed: holdWithLidClosed && sudoersRuleInstalled
+        )
+        UserNotifier.requestPermission()
+        lidNotice = nil
         reconcile()
+    }
+
+    func stopHold() {
+        switches.manualHold = nil
+        reconcile()
+    }
+
+    /// "Also with Lid Closed". Needs the sudoers rule, like closed-lid mode itself.
+    func toggleHoldWithLidClosed() {
+        guard holdWithLidClosed || sudoersRuleInstalled else {
+            onOpenSettings?()
+            return
+        }
+        holdWithLidClosed.toggle()
+        UserDefaults.standard.set(holdWithLidClosed, forKey: "holdWithLidClosed")
+        switches.manualHold?.withLidClosed = holdWithLidClosed
+        if holdWithLidClosed { prepareForDisablingSleep() }
+        reconcile()
+    }
+
+    /// The first time the user lets Lidless disable sleep, make sure Lidless comes back after a
+    /// restart: sleep stays disabled across a reboot until Lidless runs again to restore it.
+    private func prepareForDisablingSleep() {
+        UserNotifier.requestPermission()
+        guard Bundle.main.bundleIdentifier != nil,
+              !UserDefaults.standard.bool(forKey: "didEnableLoginItemForLidMode")
+        else { return }
+        UserDefaults.standard.set(true, forKey: "didEnableLoginItemForLidMode")
+        guard !opensAtLogin else { return }
+        setOpensAtLogin(true)
+        if opensAtLogin {
+            lidNotice = "Lidless now opens at login, so it can always turn sleep back on after a restart. Change this in Settings."
+        }
     }
 
     /// Why closed-lid mode cannot be armed right now, if it cannot.
@@ -227,8 +303,8 @@ final class AppModel: ObservableObject {
             return
         }
         switches.lidArmed.toggle()
-        if switches.lidArmed { UserNotifier.requestPermission() }
         lidNotice = nil
+        if switches.lidArmed { prepareForDisablingSleep() }
         reconcile()
     }
 

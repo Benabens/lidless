@@ -4,6 +4,11 @@ import LidlessCore
 /// The menu bar icon and its menu.
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate {
+    /// The "Keep Awake For" presets, in seconds.
+    private static let timerPresets: [(title: String, duration: TimeInterval)] = [
+        ("15 Minutes", 15 * 60), ("30 Minutes", 30 * 60), ("1 Hour", 3600), ("2 Hours", 2 * 3600), ("4 Hours", 4 * 3600),
+    ]
+
     private let model: AppModel
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
@@ -11,28 +16,34 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     init(model: AppModel) {
         self.model = model
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         menu.delegate = self
         menu.autoenablesItems = false
         statusItem.menu = menu
+        statusItem.button?.imagePosition = .imageLeading
+        statusItem.button?.font = .monospacedDigitSystemFont(
+            ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular
+        )
         refresh()
     }
 
-    /// Updates the icon. The menu itself is rebuilt each time it opens.
+    /// Updates the icon and the optional countdown. The menu is rebuilt each time it opens.
     func refresh() {
         let icon = iconState
         if icon != shownIcon {
             statusItem.button?.image = StatusIcon.image(for: icon)
             shownIcon = icon
         }
+        let countdown = model.showsTimerInMenuBar ? compactCountdown : ""
+        if statusItem.button?.title != countdown { statusItem.button?.title = countdown }
         statusItem.button?.toolTip = statusLine
         statusItem.button?.setAccessibilityLabel("Lidless")
-        statusItem.button?.setAccessibilityValue(statusLine)
+        statusItem.button?.setAccessibilityValue([statusLine, timerLine].compactMap { $0 }.joined(separator: ". "))
     }
 
     private var iconState: StatusIconState {
-        if model.lidArmed { return .lid }
+        if model.lidArmed || model.manualHold?.withLidClosed == true { return .lid }
         return model.outcome.keepAwake ? .awake : .asleep
     }
 
@@ -44,8 +55,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
 
         menu.addItem(info(statusLine))
+        if let timerLine {
+            menu.addItem(info(timerLine))
+        }
         if model.lidModeActive {
-            menu.addItem(info("Closed-lid mode is active: you can close the lid."))
+            menu.addItem(info("Sleep is off: you can close the lid."))
         }
         if let notice = model.lidNotice {
             menu.addItem(info(notice))
@@ -55,10 +69,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         addSessions(to: menu)
 
         menu.addItem(.separator())
-        let keepAwake = action("Keep Awake Anyway", #selector(toggleKeepAwake))
-        keepAwake.state = model.keepAwakeAnyway ? .on : .off
-        describe(keepAwake, "Even when no agent is working")
-        menu.addItem(keepAwake)
+        menu.addItem(timerItem())
+        if model.manualHold != nil {
+            menu.addItem(action("Stop Keeping Awake", #selector(stopHold)))
+        }
         menu.addItem(lidItem())
 
         menu.addItem(.separator())
@@ -130,6 +144,50 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// "Keep Awake For ▸": a timer that holds the Mac awake whether or not an agent is working.
+    private func timerItem() -> NSMenuItem {
+        let hold = model.manualHold
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+
+        for preset in Self.timerPresets {
+            let item = action(preset.title, #selector(startTimer(_:)))
+            item.representedObject = preset.duration
+            submenu.addItem(item)
+        }
+        let openEnded = action("Until I Turn It Off", #selector(startOpenEndedHold))
+        openEnded.state = (hold != nil && hold?.until == nil) ? .on : .off
+        submenu.addItem(openEnded)
+        submenu.addItem(action("Custom…", #selector(askForCustomDuration)))
+
+        submenu.addItem(.separator())
+        submenu.addItem(holdLidItem())
+
+        submenu.addItem(.separator())
+        let stop = action("Stop", #selector(stopHold))
+        stop.isEnabled = hold != nil
+        submenu.addItem(stop)
+
+        let item = NSMenuItem(title: "Keep Awake For", action: nil, keyEquivalent: "")
+        item.submenu = submenu
+        item.state = hold != nil ? .on : .off
+        return item
+    }
+
+    private func holdLidItem() -> NSMenuItem {
+        let item = action("Also with Lid Closed", #selector(toggleHoldLid))
+        item.state = model.holdWithLidClosed ? .on : .off
+        if !model.sudoersRuleInstalled {
+            describe(item, "One-time setup in Settings")
+        } else if !model.holdWithLidClosed, let obstacle = model.lidArmingObstacle {
+            item.isEnabled = false
+            describe(item, obstacle)
+        } else {
+            describe(item, "Until the timer ends, the battery gets low or the Mac gets hot")
+        }
+        return item
+    }
+
     private func lidItem() -> NSMenuItem {
         guard model.sudoersRuleInstalled else {
             let setUp = action("Set Up Closed-Lid Mode…", #selector(openSettings))
@@ -161,8 +219,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             let remaining = until.timeIntervalSinceNow
             return remaining < 60 ? "Awake for less than a minute more"
                 : "Awake for \(Self.duration(seconds: remaining)) more"
-        case .manual:
-            return "Awake: kept on by you"
+        case let .manual(until):
+            return until == nil ? "Awake until you turn it off" : "Awake: timer running"
         case .suppressed(.onBattery):
             return "Paused: on battery power"
         case .suppressed(.lowBattery):
@@ -170,6 +228,28 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         case .suppressed(.capReached):
             return "Paused: awake limit reached"
         }
+    }
+
+    /// The user's hold, when the status line does not already say it all: how long is left.
+    private var timerLine: String? {
+        guard let hold = model.manualHold else { return nil }
+        let lid = hold.withLidClosed ? ", lid closed too" : ""
+        guard let until = hold.until else {
+            if case .manual = model.outcome.status { return hold.withLidClosed ? "Lid closed too" : nil }
+            return "Also kept awake until you turn it off\(lid)"
+        }
+        // Rounded up, like the countdown: a timer just started for 45 minutes has 45 left.
+        let remaining = (until.timeIntervalSinceNow / 60).rounded(.up) * 60
+        return remaining <= 60 ? "Timer: less than a minute left\(lid)"
+            : "Timer: \(Self.duration(seconds: remaining)) left\(lid)"
+    }
+
+    /// The countdown shown next to the icon: `1h 05m`, `42m`, `<1m`. Empty without a timer.
+    private var compactCountdown: String {
+        guard let until = model.manualHold?.until else { return "" }
+        let minutes = Int((until.timeIntervalSinceNow / 60).rounded(.up))
+        if minutes <= 1 { return "<1m" }
+        return minutes >= 60 ? "\(minutes / 60)h \(String(format: "%02d", minutes % 60))m" : "\(minutes)m"
     }
 
     private static let durationFormatter: DateComponentsFormatter = {
@@ -215,8 +295,49 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Actions
 
-    @objc private func toggleKeepAwake() {
-        model.toggleKeepAwakeAnyway()
+    @objc private func startTimer(_ sender: NSMenuItem) {
+        guard let duration = sender.representedObject as? TimeInterval else { return }
+        model.startHold(for: duration)
+    }
+
+    @objc private func startOpenEndedHold() {
+        model.startHold(for: nil)
+    }
+
+    /// Asks for a free-form duration, and asks again, saying why, when it cannot be read.
+    @objc private func askForCustomDuration() {
+        let hint = "Minutes, or hours and minutes: 45, 1h30, 2:15. Up to 24 hours."
+        var message = hint
+        var typed = ""
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "Keep awake for how long?"
+            alert.informativeText = message
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+            field.placeholderString = "1h30"
+            field.stringValue = typed
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Start")
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+
+            NSApp.activate(ignoringOtherApps: true)
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            typed = field.stringValue
+            if let duration = DurationText.parse(typed) {
+                model.startHold(for: duration)
+                return
+            }
+            message = "Lidless could not read “\(typed)” as a duration. \(hint)"
+        }
+    }
+
+    @objc private func toggleHoldLid() {
+        model.toggleHoldWithLidClosed()
+    }
+
+    @objc private func stopHold() {
+        model.stopHold()
     }
 
     @objc private func toggleLid() {

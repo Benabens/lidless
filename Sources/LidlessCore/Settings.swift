@@ -57,13 +57,27 @@ public enum ThermalPressure: Int, Comparable, Sendable {
     }
 }
 
-/// The two switches the user flips from the menu. The reconciler may flip them back off.
+/// The user asked for the Mac to stay awake whatever the agents do: a timer, or an open-ended hold.
+public struct ManualHold: Equatable, Sendable {
+    /// When the hold ends. `nil`: until the user turns it off.
+    public var until: Date?
+    /// Also keep the Mac awake with its lid closed, under the same guards as closed-lid mode.
+    public var withLidClosed: Bool
+
+    public init(until: Date?, withLidClosed: Bool = false) {
+        self.until = until
+        self.withLidClosed = withLidClosed
+    }
+}
+
+/// What the user set from the menu. The reconciler may switch any of it back off.
 public struct Switches: Equatable, Sendable {
-    public var keepAwakeAnyway: Bool
+    public var manualHold: ManualHold?
+    /// Closed-lid mode for agents is armed.
     public var lidArmed: Bool
 
-    public init(keepAwakeAnyway: Bool = false, lidArmed: Bool = false) {
-        self.keepAwakeAnyway = keepAwakeAnyway
+    public init(manualHold: ManualHold? = nil, lidArmed: Bool = false) {
+        self.manualHold = manualHold
         self.lidArmed = lidArmed
     }
 }
