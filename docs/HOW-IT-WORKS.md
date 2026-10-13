@@ -83,7 +83,7 @@ swift test
 ./scripts/bundle.sh --native   # quick bundle for this Mac only
 ```
 
-To try the whole app without touching a real agent configuration, point it at a throwaway home: `LIDLESS_HOME=/tmp/pretend-home LIDLESS_SUPPORT_DIR=/tmp/lidless-support dist/Lidless.app/Contents/MacOS/Lidless`.
+To try the whole app without touching a real agent configuration, point it at a throwaway home: `LIDLESS_HOME=/tmp/pretend-home LIDLESS_SUPPORT_DIR=/tmp/lidless-support dist/Lidless.app/Contents/MacOS/Lidless`. Add `LIDLESS_DRY_RUN=1` and closed-lid mode goes through every step without running `pmset`.
 
 - `Sources/LidlessCore` — all the logic, no AppKit: the reconciler, session files, the order-preserving JSON merge, the sudoers rule. This is what the tests cover.
 - `Sources/Lidless` — the menu bar app (AppKit, SwiftUI for settings).

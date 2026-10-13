@@ -4,6 +4,16 @@ All notable changes to Lidless are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-10-13
+
+### Added
+
+- "Lid Closed for 30 Min" in the menu, right under Closed-Lid Mode: one click keeps the Mac awake
+  with the lid closed for half an hour, whether or not an agent is working, under the same battery,
+  heat and watchdog rules. While a lid-closed hold runs, the item shows the time left and a click
+  stops it.
+- `LIDLESS_DRY_RUN`, to try closed-lid mode end to end without running `pmset`.
+
 ## [0.1.0] - 2026-10-13
 
 First release.

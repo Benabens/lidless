@@ -40,6 +40,7 @@ More in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) and [docs/PERFORMANCE.md](d
 Close the lid, put the Mac in your bag, and the agents keep going.
 
 - **You arm it** from the menu. While an agent is working, Lidless turns system sleep off, on the power adapter or on battery.
+- **Lid Closed for 30 Min**, in the menu, does it in one click, whether or not an agent is working.
 - **It turns itself off** when every agent has finished, when the battery drops below 20%, when the Mac gets hot, or after 6 hours. A notification tells you why.
 - **It needs a one-time setup**: a sudoers rule that lets your account run exactly two commands without a password, `pmset -a disablesleep 1` and `pmset -a disablesleep 0`. Nothing else, and Settings removes it.
 - **It always gives sleep back**: when it quits, when it starts, and through a watchdog if it crashes or freezes. It opens at login for the same reason.

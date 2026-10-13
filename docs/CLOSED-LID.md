@@ -21,7 +21,7 @@ When one of the last three cuts a run short, a notification tells you why once y
 
 Lidless also puts the setting back when it launches and when it quits, and a small watchdog does it if the app is killed, crashes or freezes. It only ever undoes its own change: if `disablesleep` was already on when you armed the mode, Lidless leaves it alone.
 
-The **Keep Awake For** timer has the same option, **Also with Lid Closed**. It uses the same switch and obeys the same battery and heat rules. It ends with the timer, and *Until I Turn It Off* ends at the awake limit. It is never remembered: it unchecks itself when the hold ends.
+**Lid Closed for 30 Min**, right under Closed-Lid Mode in the menu, keeps the Mac awake with the lid closed for half an hour in one click, whether or not an agent is working; while it runs, the item shows the time left and a click stops it. The **Keep Awake For** timer has the same option for any duration, **Also with Lid Closed**. It uses the same switch and obeys the same battery and heat rules. It ends with the timer, and *Until I Turn It Off* ends at the awake limit. It is never remembered: it unchecks itself when the hold ends.
 
 ## The sudoers rule
 
