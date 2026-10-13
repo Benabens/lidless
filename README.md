@@ -128,9 +128,9 @@ Be clear about what you are agreeing to:
 
 Measured on an M3 Pro, details and method in [docs/PERFORMANCE.md](docs/PERFORMANCE.md):
 
-- `lidless-hook` takes about 5 ms per call (1.6 ms of which is starting a process), and prints nothing, ever: nothing of it lands in an agent's context.
-- At rest the app uses 0.005% of a CPU and wakes it about 3 times a minute. It does not poll: the 10-second check only runs while an agent is working or a timer is running.
-- With three agents working, each calling a tool every 2 seconds: 0.04% of a CPU, 0.2 wake-ups per second.
+- `lidless-hook` takes 5 to 6 ms per call (1.7 ms of which is starting a process), and prints nothing, ever: nothing of it lands in an agent's context.
+- At rest the app uses 0.003 to 0.005% of a CPU and wakes it about 3 times a minute. It does not poll: the 10-second check only runs while an agent is working or a timer is running.
+- With three agents working, each calling a tool every 2 seconds: 0.04 to 0.2% of a CPU and under one wake-up per second, depending on the run.
 - 14 MB of memory. The universal bundle is 3.9 MB (2 MB zipped).
 
 ## Uninstall
