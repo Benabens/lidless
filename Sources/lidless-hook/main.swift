@@ -6,7 +6,7 @@ import LidlessCore
 //
 // Called by the hooks of Claude Code, Codex and Gemini CLI. Records the event as a session file
 // for the Lidless app to pick up. A hook must never get in the agent's way, so this prints nothing
-// on stdout (agents read it), never blocks on stdin, and always exits 0.
+// on stdout or stderr (agents read them), never blocks on stdin, and always exits 0.
 
 let usage = "usage: lidless-hook <claude|codex|gemini> <start|prompt|activity|stop|end> [--pid <pid>]\n"
 
@@ -41,7 +41,11 @@ guard arguments.count == 2,
       let agent = Agent(rawValue: arguments[0]),
       let event = HookEvent(rawValue: arguments[1])
 else {
-    FileHandle.standardError.write(Data(usage.utf8))
+    // Usage is for a person at a terminal. Called by an agent, even wrongly, the hook says nothing:
+    // whatever it prints could land in the agent's context.
+    if isatty(STDIN_FILENO) != 0 {
+        FileHandle.standardError.write(Data(usage.utf8))
+    }
     exit(0)
 }
 

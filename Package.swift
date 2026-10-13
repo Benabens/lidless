@@ -16,6 +16,7 @@ let package = Package(
         .executableTarget(name: "Lidless", dependencies: ["LidlessCore"]),
         // Tiny executable invoked by the agents' hooks.
         .executableTarget(name: "lidless-hook", dependencies: ["LidlessCore"]),
-        .testTarget(name: "LidlessCoreTests", dependencies: ["LidlessCore"]),
+        // Depends on lidless-hook so the tests can run the real executable.
+        .testTarget(name: "LidlessCoreTests", dependencies: ["LidlessCore", "lidless-hook"]),
     ]
 )
