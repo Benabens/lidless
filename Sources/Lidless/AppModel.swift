@@ -50,6 +50,7 @@ final class AppModel: ObservableObject {
     private var engineState = EngineState()
     private var timer: Timer?
     private var wakeObserver: NSObjectProtocol?
+    private var thermalObserver: NSObjectProtocol?
     private var pendingReconcile = false
 
     init() {
@@ -86,6 +87,12 @@ final class AppModel: ObservableObject {
             MainActor.assumeIsolated { self?.reconcile() }
         }
 
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reconcile() }
+        }
+
         let timer = Timer(timeInterval: Self.reconcileInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.reconcile() }
         }
@@ -103,6 +110,9 @@ final class AppModel: ObservableObject {
         powerMonitor.stop()
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+        if let thermalObserver {
+            NotificationCenter.default.removeObserver(thermalObserver)
         }
         assertion.set(held: false, reason: "")
         _ = lidSleep.apply(disableLidSleep: false)
@@ -131,16 +141,25 @@ final class AppModel: ObservableObject {
             )
         }
         let currentPower = PowerMonitor.currentState()
+        let thermal = ThermalPressure.current
         func pass() -> Outcome {
             Reconciler.reconcile(ReconcilerInput(
-                now: Date(), sessions: observed, power: currentPower,
+                now: Date(), sessions: observed, power: currentPower, thermal: thermal,
                 settings: settings, switches: switches, state: engineState
             ))
         }
 
         var result = pass()
         var lidResult = lidSleep.apply(disableLidSleep: result.disableLidSleep)
-        var notice = result.lidDisarmReason.map(describe)
+        var notice = result.lidDisarmReason.map { "Closed-lid mode turned itself off: \(explain($0))." }
+        if let reason = result.lidDisarmReason, reason != .workFinished {
+            // A safety rule cut the run short while nobody was looking.
+            let explanation = explain(reason)
+            UserNotifier.post(
+                title: "Closed-lid mode turned off",
+                body: explanation.prefix(1).uppercased() + explanation.dropFirst() + "."
+            )
+        }
 
         if result.disableLidSleep, lidResult == .failed {
             // pmset refused, so there is nothing to arm: switch it off and decide again.
@@ -171,12 +190,14 @@ final class AppModel: ObservableObject {
         onUpdate?()
     }
 
-    private func describe(_ reason: LidDisarmReason) -> String {
+    /// Why closed-lid mode switched itself off, as the end of a sentence.
+    private func explain(_ reason: LidDisarmReason) -> String {
         switch reason {
-        case .workFinished: "Closed-lid mode turned itself off: every agent finished."
-        case .onBattery: "Closed-lid mode turned itself off: the Mac is on battery."
-        case .lowBattery: "Closed-lid mode turned itself off: battery below \(settings.batteryFloor)%."
-        case .capReached: "Closed-lid mode turned itself off: the awake limit was reached."
+        case .workFinished: "every agent finished"
+        case .onBattery: "the Mac went on battery and “Only on power adapter” is on"
+        case .lowBattery: "the battery dropped below \(settings.batteryFloor)%"
+        case .overheating: "the Mac was getting too hot"
+        case .capReached: "the awake limit was reached"
         }
     }
 
@@ -192,9 +213,10 @@ final class AppModel: ObservableObject {
 
     /// Why closed-lid mode cannot be armed right now, if it cannot.
     var lidArmingObstacle: String? {
-        switch Reconciler.lidObstacle(power: power, settings: settings) {
-        case .onBattery: "Needs the power adapter"
+        switch Reconciler.lidObstacle(power: power, settings: settings, thermal: .current) {
+        case .onBattery: "“Only on power adapter” is on"
         case .lowBattery: "Battery below \(settings.batteryFloor)%"
+        case .overheating: "The Mac is too hot right now"
         default: nil
         }
     }
@@ -205,6 +227,7 @@ final class AppModel: ObservableObject {
             return
         }
         switches.lidArmed.toggle()
+        if switches.lidArmed { UserNotifier.requestPermission() }
         lidNotice = nil
         reconcile()
     }

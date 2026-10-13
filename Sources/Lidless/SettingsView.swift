@@ -76,7 +76,10 @@ struct SettingsView: View {
                 Text("10 minutes").tag(TimeInterval(600))
                 Text("15 minutes").tag(TimeInterval(900))
             }
-            Toggle("Only on power adapter", isOn: $model.settings.acOnly)
+            Toggle(isOn: $model.settings.acOnly) {
+                Text("Only on power adapter")
+                Text("Off: agents may keep the Mac awake on battery, lid closed included")
+            }
             Picker("Stop below battery level", selection: $model.settings.batteryFloor) {
                 Text("Never").tag(0)
                 ForEach([10, 20, 30, 40, 50], id: \.self) { percent in
@@ -127,7 +130,7 @@ struct SettingsView: View {
         } header: {
             Text("Closed-Lid Mode")
         } footer: {
-            Text("While armed, Lidless turns system sleep off as long as agents work on power, then back on. That needs administrator rights, so the rule lets your account run two commands without a password: “pmset -a disablesleep 1” and “pmset -a disablesleep 0”. Nothing else.")
+            Text("While armed, Lidless turns system sleep off as long as agents work, on battery too, then back on. It also stops when the battery gets low or the Mac gets hot. That needs administrator rights, so the rule lets your account run two commands without a password: “pmset -a disablesleep 1” and “pmset -a disablesleep 0”. Nothing else.")
         }
     }
 

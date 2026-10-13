@@ -40,6 +40,7 @@ private func reconcile(
     settings: LidlessSettings = LidlessSettings(),
     switches: Switches = Switches(),
     state: EngineState = EngineState(),
+    thermal: ThermalPressure = .nominal,
     sincePreviousPass: TimeInterval = 10
 ) -> Outcome {
     var state = state
@@ -49,6 +50,7 @@ private func reconcile(
             now: at(seconds),
             sessions: sessions,
             power: power,
+            thermal: thermal,
             settings: settings,
             switches: switches,
             state: state
@@ -154,6 +156,14 @@ struct ReconcilerDemandTests {
 
 @Suite("Reconciler — never keep the Mac hot for nothing")
 struct ReconcilerSafetyTests {
+    @Test func outOfTheBoxBatteryPowerIsAllowedDownToTwentyPercent() {
+        let defaults = LidlessSettings()
+        #expect(defaults.acOnly == false)
+        #expect(defaults.batteryFloor == 20)
+        #expect(defaults.maxAwakeDuration == 6 * 3600)
+        #expect(defaults.stallTimeout == 30 * 60)
+    }
+
     @Test func aWorkingSessionThatWentSilentIsTreatedAsIdle() {
         var settings = LidlessSettings()
         settings.stallTimeout = 30 * 60
@@ -339,12 +349,120 @@ struct ReconcilerSafetyTests {
 struct ReconcilerLidTests {
     private let armed = Switches(lidArmed: true)
 
+    private let onBattery = PowerState(isOnAC: false, batteryPercent: 80)
+    private let pluggedIn = PowerState(isOnAC: true, batteryPercent: 80)
+
+    @Test func nothingStandsInTheWayOfArmingOnBattery() {
+        let settings = LidlessSettings(batteryFloor: 20)
+        #expect(Reconciler.lidObstacle(power: onBattery, settings: settings, thermal: .nominal) == nil)
+        #expect(Reconciler.lidObstacle(power: pluggedIn, settings: settings, thermal: .fair) == nil)
+        #expect(Reconciler.lidObstacle(power: PowerState(isOnAC: true, batteryPercent: nil), settings: settings, thermal: .nominal) == nil)
+    }
+
     @Test func saysWhatStandsInTheWayOfArming() {
         let settings = LidlessSettings(batteryFloor: 20)
-        #expect(Reconciler.lidObstacle(power: PowerState(isOnAC: true, batteryPercent: 80), settings: settings) == nil)
-        #expect(Reconciler.lidObstacle(power: PowerState(isOnAC: true, batteryPercent: nil), settings: settings) == nil)
-        #expect(Reconciler.lidObstacle(power: PowerState(isOnAC: false, batteryPercent: 80), settings: settings) == .onBattery)
-        #expect(Reconciler.lidObstacle(power: PowerState(isOnAC: true, batteryPercent: 19), settings: settings) == .lowBattery)
+        let low = PowerState(isOnAC: false, batteryPercent: 19)
+        #expect(Reconciler.lidObstacle(power: low, settings: settings, thermal: .nominal) == .lowBattery)
+        #expect(Reconciler.lidObstacle(power: PowerState(isOnAC: true, batteryPercent: 19), settings: settings, thermal: .nominal) == .lowBattery)
+        #expect(Reconciler.lidObstacle(power: onBattery, settings: settings, thermal: .serious) == .overheating)
+        #expect(Reconciler.lidObstacle(power: pluggedIn, settings: settings, thermal: .critical) == .overheating)
+
+        let powerAdapterOnly = LidlessSettings(acOnly: true, batteryFloor: 20)
+        #expect(Reconciler.lidObstacle(power: onBattery, settings: powerAdapterOnly, thermal: .nominal) == .onBattery)
+        #expect(Reconciler.lidObstacle(power: pluggedIn, settings: powerAdapterOnly, thermal: .nominal) == nil)
+    }
+
+    @Test func worksOnBatteryFromTheStart() {
+        // The main use: close the lid, unplugged, and put the Mac in a bag while agents run.
+        let outcome = reconcile(at: 30, [session(working: 0)], power: onBattery, switches: armed)
+        #expect(outcome.disableLidSleep == true)
+        #expect(outcome.keepAwake == true)
+        #expect(outcome.switches.lidArmed == true)
+        #expect(outcome.lidDisarmReason == nil)
+    }
+
+    @Test func unpluggingDoesNotInterruptClosedLidMode() {
+        let engaged = reconcile(at: 30, [session(working: 0)], power: pluggedIn, switches: armed)
+        let unplugged = reconcile(
+            at: 40, [session(working: 0, lastEvent: 35)],
+            power: onBattery, switches: engaged.switches, state: engaged.state
+        )
+        #expect(unplugged.disableLidSleep == true)
+        #expect(unplugged.switches.lidArmed == true)
+        #expect(unplugged.lidDisarmReason == nil)
+    }
+
+    @Test func onBatteryItStillDisarmsOnceEveryAgentIsDone() {
+        var settings = LidlessSettings()
+        settings.gracePeriod = 120
+        let engaged = reconcile(at: 30, [session(working: 0)], power: onBattery, settings: settings, switches: armed)
+        let done = reconcile(
+            at: 90 + 120, [session(idle: 90)],
+            power: onBattery, settings: settings, switches: engaged.switches, state: engaged.state
+        )
+        #expect(done.disableLidSleep == false)
+        #expect(done.switches.lidArmed == false)
+        #expect(done.lidDisarmReason == .workFinished)
+    }
+
+    @Test func onBatteryItDisarmsBelowTheBatteryFloor() {
+        var settings = LidlessSettings()
+        settings.batteryFloor = 20
+        let engaged = reconcile(at: 30, [session(working: 0)], power: onBattery, settings: settings, switches: armed)
+        #expect(engaged.disableLidSleep == true)
+
+        let drained = reconcile(
+            at: 40, [session(working: 0, lastEvent: 35)],
+            power: PowerState(isOnAC: false, batteryPercent: 19),
+            settings: settings, switches: engaged.switches, state: engaged.state
+        )
+        #expect(drained.disableLidSleep == false)
+        #expect(drained.switches.lidArmed == false)
+        #expect(drained.lidDisarmReason == .lowBattery)
+        // Nothing keeps a Mac with a low battery awake at all.
+        #expect(drained.keepAwake == false)
+    }
+
+    @Test func withOnlyOnPowerAdapterUnpluggingDisarms() {
+        // Off by default; for whoever never wants the Mac awake in a bag.
+        var settings = LidlessSettings()
+        settings.acOnly = true
+        let engaged = reconcile(at: 30, [session(working: 0)], power: pluggedIn, settings: settings, switches: armed)
+        #expect(engaged.disableLidSleep == true)
+
+        let unplugged = reconcile(
+            at: 40, [session(working: 0, lastEvent: 35)],
+            power: onBattery, settings: settings, switches: engaged.switches, state: engaged.state
+        )
+        #expect(unplugged.disableLidSleep == false)
+        #expect(unplugged.switches.lidArmed == false)
+        #expect(unplugged.lidDisarmReason == .onBattery)
+    }
+
+    @Test(arguments: [ThermalPressure.serious, .critical])
+    func disarmsWhenTheMacGetsHot(thermal: ThermalPressure) {
+        let engaged = reconcile(at: 30, [session(working: 0)], power: onBattery, switches: armed)
+        let hot = reconcile(
+            at: 40, [session(working: 0, lastEvent: 35)],
+            power: onBattery, switches: engaged.switches, state: engaged.state, thermal: thermal
+        )
+        #expect(hot.disableLidSleep == false)
+        #expect(hot.switches.lidArmed == false)
+        #expect(hot.lidDisarmReason == .overheating)
+    }
+
+    @Test(arguments: [ThermalPressure.nominal, .fair])
+    func aWarmMacIsFine(thermal: ThermalPressure) {
+        let outcome = reconcile(at: 30, [session(working: 0)], power: onBattery, switches: armed, thermal: thermal)
+        #expect(outcome.disableLidSleep == true)
+        #expect(outcome.lidDisarmReason == nil)
+    }
+
+    @Test func heatOnlyStopsClosedLidModeNotTheOrdinaryAssertion() {
+        // With the lid open, a hot Mac under load is normal and its user is right there.
+        let outcome = reconcile(at: 30, [session(working: 0)], thermal: .critical)
+        #expect(outcome.keepAwake == true)
+        #expect(outcome.status == .working(count: 1))
     }
 
     @Test func neverTouchesLidSleepUnlessArmed() {
@@ -420,18 +538,6 @@ struct ReconcilerLidTests {
             at: 300, [session(working: 290)], settings: settings, switches: graceOver.switches, state: graceOver.state
         )
         #expect(working.disableLidSleep == true)
-    }
-
-    @Test func disarmsTheMomentTheMacGoesOnBattery() {
-        let engaged = reconcile(at: 30, [session(working: 0)], switches: armed)
-        let unplugged = reconcile(
-            at: 31, [session(working: 0)],
-            power: PowerState(isOnAC: false, batteryPercent: 95),
-            switches: engaged.switches, state: engaged.state
-        )
-        #expect(unplugged.disableLidSleep == false)
-        #expect(unplugged.switches.lidArmed == false)
-        #expect(unplugged.lidDisarmReason == .onBattery)
     }
 
     @Test func disarmsBelowTheBatteryFloorEvenWhilePluggedIn() {

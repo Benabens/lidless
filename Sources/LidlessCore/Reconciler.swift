@@ -34,6 +34,7 @@ public struct ReconcilerInput: Sendable {
     public var now: Date
     public var sessions: [ObservedSession]
     public var power: PowerState
+    public var thermal: ThermalPressure
     public var settings: LidlessSettings
     public var switches: Switches
     public var state: EngineState
@@ -42,6 +43,7 @@ public struct ReconcilerInput: Sendable {
         now: Date,
         sessions: [ObservedSession],
         power: PowerState,
+        thermal: ThermalPressure = .nominal,
         settings: LidlessSettings,
         switches: Switches,
         state: EngineState
@@ -49,6 +51,7 @@ public struct ReconcilerInput: Sendable {
         self.now = now
         self.sessions = sessions
         self.power = power
+        self.thermal = thermal
         self.settings = settings
         self.switches = switches
         self.state = state
@@ -65,8 +68,10 @@ public enum SuppressReason: Equatable, Sendable {
 /// Why closed-lid mode switched itself off.
 public enum LidDisarmReason: Equatable, Sendable {
     case workFinished
+    /// Unplugged while "only on power adapter" is on.
     case onBattery
     case lowBattery
+    case overheating
     case capReached
 }
 
@@ -187,7 +192,7 @@ public enum Reconciler {
         var disableLidSleep = false
         var lidDisarmReason: LidDisarmReason?
         if switches.lidArmed {
-            if let obstacle = lidObstacle(power: input.power, settings: settings) {
+            if let obstacle = lidObstacle(power: input.power, settings: settings, thermal: input.thermal) {
                 lidDisarmReason = obstacle
             } else if capTrippedNow {
                 lidDisarmReason = .capReached
@@ -214,8 +219,13 @@ public enum Reconciler {
     }
 
     /// What rules closed-lid mode out right now, whoever is working. `nil` when it may be armed.
-    public static func lidObstacle(power: PowerState, settings: LidlessSettings) -> LidDisarmReason? {
-        if !power.isOnAC { return .onBattery }
+    /// Battery power alone is no obstacle: a Mac closed in a bag, unplugged, is what the mode is
+    /// for. Heat and a low battery are, plugged in or not.
+    public static func lidObstacle(
+        power: PowerState, settings: LidlessSettings, thermal: ThermalPressure
+    ) -> LidDisarmReason? {
+        if thermal >= .serious { return .overheating }
+        if settings.acOnly, !power.isOnAC { return .onBattery }
         if let percent = power.batteryPercent, percent < settings.batteryFloor { return .lowBattery }
         return nil
     }

@@ -50,3 +50,17 @@ final class PowerMonitor {
         return PowerState(isOnAC: isOnAC, batteryPercent: batteryPercent)
     }
 }
+
+extension ThermalPressure {
+    /// macOS's own reading of how hot the Mac is running.
+    static var current: ThermalPressure {
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal: .nominal
+        case .fair: .fair
+        case .serious: .serious
+        case .critical: .critical
+        // A state this version does not know is not one to gamble a closed Mac on.
+        @unknown default: .critical
+        }
+    }
+}
