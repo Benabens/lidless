@@ -1,8 +1,8 @@
 # Lidless
 
-A macOS menu bar app that keeps your Mac awake **only while a coding agent is working** — Claude Code, Codex or Gemini CLI — and lets it sleep normally the moment they are done. It can also keep them working with the lid closed.
+A macOS menu bar app that keeps your Mac awake **only while a coding agent is working** — Claude Code, Codex or Gemini CLI — and lets it sleep normally the moment they are done. It can also keep them working with the lid closed, plugged in or not.
 
-Start a long agent run, walk away, close the lid if you like. When the last agent finishes, the Mac goes back to sleeping as usual. No timer to guess, nothing to remember to turn off.
+Start a long agent run, close the lid, put the Mac in your bag. When the last agent finishes, the Mac goes back to sleeping as usual. No timer to guess, nothing to remember to turn off.
 
 ## How it works
 
@@ -20,7 +20,7 @@ The decision is a pure function with a full test suite, and it errs on the side 
 | A session whose process died no longer counts | always |
 | A working session that sends no event for a while is treated as idle (agents do not report an interrupted turn) | 30 minutes |
 | Hard ceiling on one uninterrupted stretch of wakefulness | 6 hours |
-| Stop keeping awake on battery below a level | 20% |
+| Stop keeping awake when the battery drops below a level | 20% |
 | Only keep awake on the power adapter | off |
 
 ## Requirements
@@ -71,12 +71,18 @@ The hooks call `~/Library/Application Support/Lidless/bin/lidless-hook`, a copy 
 
 ## Closed-lid mode
 
-Closing the lid normally puts a Mac to sleep whatever is running. Closed-lid mode is a switch **you** arm from the menu:
+Closing the lid normally puts a Mac to sleep whatever is running. Closed-lid mode is a switch **you** arm from the menu. It works on the power adapter and on battery: unplugging changes nothing.
 
-- Armed, on the power adapter, with at least one agent working: Lidless runs `pmset -a disablesleep 1`, and the Mac keeps working with the lid closed.
-- It runs `pmset -a disablesleep 0` and disarms itself as soon as every agent has finished (after the grace period), **or** the Mac goes on battery, **or** the battery drops below the level you set, **or** the awake limit is reached.
+While it is armed and at least one agent is working, Lidless runs `pmset -a disablesleep 1` and the Mac keeps working with the lid closed. It runs `pmset -a disablesleep 0` and disarms itself as soon as any of these is true:
 
-It never runs on battery. A Mac that stays awake in a closed bag gets hot, and the whole point of Lidless is to not keep a Mac awake for nothing.
+- every agent has finished, after the grace period (an agent that went silent counts as finished);
+- the battery drops below the level you set (20% by default), plugged in or not;
+- the Mac gets hot: macOS reports *serious* or *critical* thermal pressure;
+- the awake limit is reached (6 hours by default).
+
+When one of the last three cuts a run short, a notification tells you why once you open the Mac. If you never want the Mac awake on battery, turn on **Only on power adapter** in Settings: unplugging then disarms closed-lid mode too.
+
+**Heat.** A closed Mac sheds heat less well, and a bag traps what it sheds. Agents mostly wait on the network, so the load is usually light, but builds and test suites running locally are not. Use a bag or sleeve with some air around the Mac, not a tightly packed pocket, and never leave it running under a duvet or a cushion. The thermal rule above is a backstop, not a reason to skip this.
 
 Lidless also puts the setting back when it launches and when it quits, and a small watchdog does it if the app is killed, crashes or freezes. It only ever undoes its own change: if `disablesleep` was already on when you armed the mode, Lidless leaves it alone.
 
@@ -101,8 +107,8 @@ Be clear about what you are agreeing to:
 
 ## Limitations
 
-- Closed-lid mode does not work on battery. macOS puts a Mac to sleep when its lid closes on battery, and the only way around that is to leave sleep disabled, which is exactly what Lidless refuses to do without the power adapter.
-- If the Mac is powered off hard while closed-lid mode is active, sleep stays disabled until Lidless starts again. Turn on *Open at login* if you use closed-lid mode, or run `sudo pmset -a disablesleep 0`.
+- If the Mac restarts or is powered off hard while closed-lid mode is active, sleep stays disabled until Lidless starts again, which in a bag means a Mac that cannot sleep. Turn on *Open at login* if you use closed-lid mode; `sudo pmset -a disablesleep 0` fixes it by hand.
+- The thermal rule relies on what macOS reports. It reacts to the Mac running hot, not to how warm the bag is.
 - An agent turn you interrupt is not reported by the agents. Lidless notices after the silent-agent timeout (30 minutes by default), or immediately if you quit the agent.
 - A single tool call that runs longer than that timeout without any other activity looks the same as a stuck session. Raise the timeout, or set it to *Never*, if your runs do that.
 - The awake limit also stops legitimate long runs. Raise it if you need more than 6 hours.

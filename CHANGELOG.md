@@ -17,10 +17,11 @@ First version.
   and disconnecting removes only Lidless's entries.
 - Safety rules: grace period after the last turn, dead-process detection, a timeout for sessions
   that go silent, power-adapter-only mode, a battery floor and an absolute awake limit.
-- Closed-lid mode: a switch that keeps agents working with the lid closed on power, and disarms
-  itself when they finish, on battery, on low battery or at the awake limit. Backed by an optional
-  sudoers rule limited to two `pmset` commands, and a watchdog that restores sleep if the app dies
-  or freezes.
+- Closed-lid mode: a switch that keeps agents working with the lid closed, on the power adapter or
+  on battery, and disarms itself when they finish, when the battery gets low, when the Mac gets hot
+  or at the awake limit, with a notification when a safety rule cuts a run short. Backed by an
+  optional sudoers rule limited to two `pmset` commands, and a watchdog that restores sleep if the
+  app dies or freezes.
 - "Keep Awake Anyway", open at login, and a settings window.
 - `scripts/bundle.sh` to build a universal `Lidless.app`, and `scripts/swiftw` to build with a
   Command Line Tools install that an in-place update left broken.
