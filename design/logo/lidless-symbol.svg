@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">Lidless</title>
+  <g id="symbol">
+    <circle id="pupil" cx="128" cy="106" r="42" fill="#17171B"/>
+    <path id="lid" fill="#17171B" d="M20 122 A121.36 121.36 0 0 0 236 122 A165.8 165.8 0 0 1 20 122 Z"/>
+  </g>
+</svg>

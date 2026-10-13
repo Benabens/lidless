@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="title">
+  <title id="title">Lidless</title>
+  <rect width="64" height="64" rx="14" fill="#17171B"/>
+  <g transform="translate(5 6) scale(3)">
+    <circle cx="9" cy="6.6" r="3.1" fill="#F5A63B"/>
+    <path fill="#F4F2EC" d="M1.113 9.884 A9.9 9.9 0 0 0 16.887 9.884 A0.8 0.8 0 0 0 15.613 8.917 A8.3 8.3 0 0 1 2.387 8.917 A0.8 0.8 0 0 0 1.113 9.884 Z"/>
+  </g>
+</svg>
