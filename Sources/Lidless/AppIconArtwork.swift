@@ -38,14 +38,18 @@ enum AppIconArtwork {
         return data
     }
 
-    /// Draws the icon in a `side` × `side` square, on Apple's 1024-point icon grid.
+    /// Draws the icon in a `side` × `side` square, on Apple's 1024-point icon grid. Same artwork
+    /// as design/logo/app-icon.svg: the mark in paper and ember on an ink tile.
     static func draw(side: CGFloat) {
         let unit = side / 1024
-        func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: x * unit, y: y * unit) }
+        let ink = (top: NSColor(srgbRed: 0.149, green: 0.149, blue: 0.176, alpha: 1),
+                   bottom: NSColor(srgbRed: 0.063, green: 0.063, blue: 0.075, alpha: 1))
+        let paper = NSColor(srgbRed: 0.957, green: 0.949, blue: 0.925, alpha: 1)
+        let ember = NSColor(srgbRed: 0.961, green: 0.651, blue: 0.231, alpha: 1)
 
         // The rounded tile, with the soft shadow macOS icons sit on.
         let tileRect = NSRect(x: 100 * unit, y: 100 * unit, width: 824 * unit, height: 824 * unit)
-        let tile = NSBezierPath(roundedRect: tileRect, xRadius: 186 * unit, yRadius: 186 * unit)
+        let tile = NSBezierPath(roundedRect: tileRect, xRadius: 185.4 * unit, yRadius: 185.4 * unit)
         NSGraphicsContext.saveGraphicsState()
         let shadow = NSShadow()
         shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
@@ -58,49 +62,34 @@ enum AppIconArtwork {
 
         NSGraphicsContext.saveGraphicsState()
         tile.addClip()
-        NSGradient(colors: [
-            NSColor(srgbRed: 0.17, green: 0.15, blue: 0.33, alpha: 1),
-            NSColor(srgbRed: 0.04, green: 0.04, blue: 0.09, alpha: 1),
-        ])?.draw(in: tileRect, angle: -90)
-
-        // Embers behind the eye.
-        NSGradient(colors: [
-            NSColor(srgbRed: 1.0, green: 0.55, blue: 0.1, alpha: 0.42),
-            NSColor(srgbRed: 1.0, green: 0.45, blue: 0.1, alpha: 0),
-        ])?.draw(
-            fromCenter: point(512, 512), radius: 0, toCenter: point(512, 512), radius: 400 * unit, options: []
-        )
+        NSGradient(colors: [ink.top, ink.bottom])?.draw(in: tileRect, angle: -90)
         NSGraphicsContext.restoreGraphicsState()
 
-        // The eye: an almond that never closes.
-        let almond = NSBezierPath()
-        almond.move(to: point(196, 512))
-        almond.curve(to: point(828, 512), controlPoint1: point(350, 760), controlPoint2: point(674, 760))
-        almond.curve(to: point(196, 512), controlPoint1: point(674, 264), controlPoint2: point(350, 264))
-        almond.close()
-
+        // The mark, drawn on its own 256-point canvas (origin bottom left) and scaled so that it
+        // spans 560 of the tile's 824 points, a touch above the middle.
+        let scale: CGFloat = 560.0 / 216.0
         NSGraphicsContext.saveGraphicsState()
-        almond.addClip()
-        NSColor(srgbRed: 0.05, green: 0.04, blue: 0.10, alpha: 1).setFill()
-        almond.fill()
-        // Iris.
-        NSGradient(colorsAndLocations:
-            (NSColor(srgbRed: 1.0, green: 0.86, blue: 0.45, alpha: 1), 0),
-            (NSColor(srgbRed: 1.0, green: 0.62, blue: 0.14, alpha: 1), 0.55),
-            (NSColor(srgbRed: 0.80, green: 0.27, blue: 0.05, alpha: 1), 1)
-        )?.draw(
-            fromCenter: point(512, 512), radius: 0, toCenter: point(512, 512), radius: 190 * unit, options: []
+        let placement = NSAffineTransform()
+        placement.translateX(by: (512 - 128 * scale) * unit, yBy: (518 - 130 * scale) * unit)
+        placement.scale(by: scale * unit)
+        placement.concat()
+
+        // Lower lid: a crescent between two arcs that share their ends at (20,134) and (236,134).
+        let lid = NSBezierPath()
+        lid.move(to: NSPoint(x: 20, y: 134))
+        lid.appendArc(
+            withCenter: NSPoint(x: 128, y: 189.36), radius: 121.36, startAngle: 207.14, endAngle: 332.86, clockwise: false
         )
+        lid.appendArc(
+            withCenter: NSPoint(x: 128, y: 259.8), radius: 165.8, startAngle: 310.65, endAngle: 229.35, clockwise: true
+        )
+        lid.close()
+        paper.setFill()
+        lid.fill()
+
+        // The pupil nothing closes over.
+        ember.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 86, y: 108, width: 84, height: 84)).fill()
         NSGraphicsContext.restoreGraphicsState()
-
-        // Slit pupil.
-        NSColor(srgbRed: 0.05, green: 0.04, blue: 0.10, alpha: 1).setFill()
-        NSBezierPath(ovalIn: NSRect(x: 478 * unit, y: 362 * unit, width: 68 * unit, height: 300 * unit)).fill()
-
-        // Outline last, so its edge stays crisp over the iris.
-        NSColor(white: 1, alpha: 0.94).setStroke()
-        almond.lineWidth = 34 * unit
-        almond.lineJoinStyle = .round
-        almond.stroke()
     }
 }
