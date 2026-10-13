@@ -85,6 +85,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             menu.addItem(action("Stop Keeping Awake", #selector(stopHold)))
         }
         menu.addItem(lidItem())
+        menu.addItem(lidClosedShortcutItem())
 
         menu.addItem(.separator())
         let settings = action("Settings…", #selector(openSettings))
@@ -218,6 +219,33 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return item
     }
 
+    /// One click to keep the Mac awake with the lid closed for half an hour, agents or not. While
+    /// a lid-closed hold runs, whoever started it, the item shows what is left and stops it.
+    private func lidClosedShortcutItem() -> NSMenuItem {
+        let item = action("Lid Closed for 30 Min", #selector(triggerLidClosedShortcut))
+        switch model.lidClosedShortcut {
+        case .ready:
+            describe(item, "Stays awake with the lid closed, agents or not")
+        case .needsSetup:
+            item.title = "Lid Closed for 30 Min…"
+            describe(item, "One-time setup in Settings")
+        case .unavailable:
+            item.isEnabled = false
+            describe(item, model.lidArmingObstacle ?? "Not available right now")
+        case let .running(until):
+            item.state = .on
+            item.title = until.map { "Lid Closed: \(Self.timeLeft(until: $0))" } ?? "Lid Closed Until You Turn It Off"
+            describe(item, "Click to stop")
+        }
+        return item
+    }
+
+    /// `24 min left`, rounded up like the countdown.
+    private static func timeLeft(until: Date) -> String {
+        let remaining = (until.timeIntervalSinceNow / 60).rounded(.up) * 60
+        return remaining <= 60 ? "less than a minute left" : "\(duration(seconds: remaining)) left"
+    }
+
     // MARK: - Text
 
     private var statusLine: String {
@@ -250,9 +278,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             return "Also kept awake until you turn it off\(lid)"
         }
         // Rounded up, like the countdown: a timer just started for 45 minutes has 45 left.
-        let remaining = (until.timeIntervalSinceNow / 60).rounded(.up) * 60
-        return remaining <= 60 ? "Timer: less than a minute left\(lid)"
-            : "Timer: \(Self.duration(seconds: remaining)) left\(lid)"
+        return "Timer: \(Self.timeLeft(until: until))\(lid)"
     }
 
     /// The countdown shown next to the icon: `1h 05m`, `42m`, `<1m`. Empty without a timer.
@@ -341,6 +367,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             }
             message = "Lidless could not read “\(typed)” as a duration. \(hint)"
         }
+    }
+
+    @objc private func triggerLidClosedShortcut() {
+        model.triggerLidClosedShortcut()
     }
 
     @objc private func toggleHoldLid() {

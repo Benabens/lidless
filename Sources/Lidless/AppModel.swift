@@ -49,6 +49,8 @@ final class AppModel: ObservableObject {
     var onOpenSettings: (() -> Void)?
 
     private let paths = LidlessPaths()
+    /// `LIDLESS_DRY_RUN`: closed-lid mode goes through every step but never runs `pmset`.
+    private let isDryRun = ProcessInfo.processInfo.environment["LIDLESS_DRY_RUN"] != nil
     private let store: SessionStore
     private let lidSleep: LidSleepController
     private let assertion = SleepAssertion()
@@ -67,7 +69,10 @@ final class AppModel: ObservableObject {
 
     init() {
         store = SessionStore(directory: paths.sessionsDirectory)
-        lidSleep = LidSleepController(powerManagement: SystemPowerManagement(), marker: paths.lidSleepMarker)
+        lidSleep = LidSleepController(
+            powerManagement: isDryRun ? DryRunPowerManagement() : SystemPowerManagement(),
+            marker: paths.lidSleepMarker
+        )
         watchdog = LidWatchdogProcess(marker: paths.lidSleepMarker)
         settings = SettingsStorage.load()
         power = PowerMonitor.currentState()
@@ -232,7 +237,8 @@ final class AppModel: ObservableObject {
             held: result.keepAwake,
             reason: heldByAgents ? "Lidless: a coding agent is working" : "Lidless: kept awake by the user"
         )
-        if lidSleep.ownsTheSetting { watchdog.start() } else { watchdog.stop() }
+        // The watchdog restores sleep with the real pmset, so a dry run goes without it.
+        if lidSleep.ownsTheSetting, !isDryRun { watchdog.start() } else { watchdog.stop() }
         // While sleep is disabled the pass must keep running: it refreshes the watchdog's
         // heartbeat and retries a restore that failed.
         setPolling(result.needsPolling || lidSleep.ownsTheSetting)
@@ -282,6 +288,33 @@ final class AppModel: ObservableObject {
         switches.manualHold = nil
         holdWithLidClosed = false
         reconcile()
+    }
+
+    /// What the "Lid Closed for 30 Min" shortcut offers right now.
+    var lidClosedShortcut: LidClosedShortcut.State {
+        LidClosedShortcut.state(
+            hold: switches.manualHold,
+            ruleInstalled: sudoersRuleInstalled,
+            obstacle: Reconciler.lidObstacle(power: power, settings: settings, thermal: .current)
+        )
+    }
+
+    /// One click: start the 30 minutes, stop a running lid-closed hold, or lead to the setup.
+    func triggerLidClosedShortcut() {
+        switch lidClosedShortcut {
+        case .needsSetup:
+            onOpenSettings?()
+        case .unavailable:
+            break
+        case .running:
+            stopHold()
+        case .ready:
+            lidNotice = nil
+            holdWithLidClosed = true
+            prepareForDisablingSleep()
+            switches.manualHold = LidClosedShortcut.hold(startingAt: Date())
+            reconcile()
+        }
     }
 
     /// "Also with Lid Closed". Needs the sudoers rule, like closed-lid mode itself.
@@ -372,7 +405,7 @@ final class AppModel: ObservableObject {
     // MARK: - Sudoers rule
 
     func refreshSudoersRule() {
-        sudoersRuleInstalled = FileManager.default.fileExists(atPath: SudoersRule.path)
+        sudoersRuleInstalled = isDryRun || FileManager.default.fileExists(atPath: SudoersRule.path)
     }
 
     func installSudoersRule() {
@@ -399,7 +432,8 @@ final class AppModel: ObservableObject {
     }
 
     private func runAsAdministrator(_ script: String, prompt: String) {
-        guard !sudoersRuleBusy else { return }
+        // A dry run pretends the rule is there; it must not touch the real one.
+        guard !sudoersRuleBusy, !isDryRun else { return }
         sudoersRuleBusy = true
         sudoersRuleError = nil
         AdministratorPrompt.run(script, prompt: prompt) { [weak self] result in

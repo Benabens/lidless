@@ -40,6 +40,22 @@ struct SystemPowerManagement: PowerManagement {
     }
 }
 
+/// Stands in for `pmset` when `LIDLESS_DRY_RUN` is set: remembers what was asked and changes
+/// nothing. With it, closed-lid mode can be tried end to end without privileges.
+final class DryRunPowerManagement: PowerManagement, @unchecked Sendable {
+    private let lock = NSLock()
+    private var disabled = false
+
+    func sleepDisabled() -> Bool? {
+        lock.withLock { disabled }
+    }
+
+    func setSleepDisabled(_ disabled: Bool) -> Bool {
+        lock.withLock { self.disabled = disabled }
+        return true
+    }
+}
+
 /// Runs a shell script as root through the standard macOS administrator prompt.
 enum AdministratorPrompt {
     enum Result {
