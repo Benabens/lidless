@@ -16,7 +16,7 @@ The decision is a pure function with a full test suite, and it errs on the side 
 
 | Rule | Default |
 | --- | --- |
-| Stay awake a little after the last turn, so back-to-back turns do not race sleep | 2 minutes |
+| Stay awake a little after the last turn, so back-to-back turns and scripted runs do not race sleep | 2 minutes |
 | A session whose process died no longer counts | always |
 | A working session that sends no event for a while is treated as idle (agents do not report an interrupted turn) | 30 minutes |
 | Hard ceiling on one uninterrupted stretch of wakefulness | 6 hours |
@@ -53,11 +53,14 @@ Turning an agent on in **Settings** adds Lidless to that agent's hooks:
 
 Lidless **merges**; it never replaces:
 
-- its entries are appended after yours, and your hooks are not touched, reordered or reformatted;
-- the original file is copied to `<file>.lidless.bak` before the first change;
-- turning the agent off removes only Lidless's entries, which gives the original file back byte for byte;
+- its entries are appended after yours; your hooks, your other settings and the order of everything stay as they are;
+- the file as it was is copied to `<file>.lidless.bak` before Lidless adds anything;
+- turning the agent off removes only Lidless's entries. If nothing else changed in the meantime, the file comes back byte for byte; if you edited it since, your edits are kept;
+- only the exact commands Lidless wrote count as its own, so a hook of yours that happens to mention `lidless-hook` is never removed;
 - a file that is not strict JSON (comments, trailing commas) is left alone, and the settings window says so;
 - file permissions are kept, and a symlinked settings file is edited in place.
+
+While an agent is connected its file is written in the standard JSON layout the agents use themselves, so a file you formatted by hand is re-indented until you disconnect.
 
 Two things to know:
 
@@ -75,7 +78,7 @@ Closing the lid normally puts a Mac to sleep whatever is running. Closed-lid mod
 
 It never runs on battery. A Mac that stays awake in a closed bag gets hot, and the whole point of Lidless is to not keep a Mac awake for nothing.
 
-Lidless also puts the setting back when it launches and when it quits, and a small watchdog does it if the app is killed or crashes. It only ever undoes its own change: if `disablesleep` was already on when you armed the mode, Lidless leaves it alone.
+Lidless also puts the setting back when it launches and when it quits, and a small watchdog does it if the app is killed, crashes or freezes. It only ever undoes its own change: if `disablesleep` was already on when you armed the mode, Lidless leaves it alone.
 
 ### The sudoers rule
 
@@ -98,6 +101,8 @@ Be clear about what you are agreeing to:
 
 ## Limitations
 
+- Closed-lid mode does not work on battery. macOS puts a Mac to sleep when its lid closes on battery, and the only way around that is to leave sleep disabled, which is exactly what Lidless refuses to do without the power adapter.
+- If the Mac is powered off hard while closed-lid mode is active, sleep stays disabled until Lidless starts again. Turn on *Open at login* if you use closed-lid mode, or run `sudo pmset -a disablesleep 0`.
 - An agent turn you interrupt is not reported by the agents. Lidless notices after the silent-agent timeout (30 minutes by default), or immediately if you quit the agent.
 - A single tool call that runs longer than that timeout without any other activity looks the same as a stuck session. Raise the timeout, or set it to *Never*, if your runs do that.
 - The awake limit also stops legitimate long runs. Raise it if you need more than 6 hours.
@@ -138,7 +143,7 @@ sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install
 
 Lidless was inspired by [insomnia](https://github.com/phin/insomnia) by phin (MIT), which had the idea of tying wakefulness to agent activity. Lidless shares no code with it.
 
-Others in the same space: Amphetamine, the built-in `caffeinate`, Adrafinil and LidAwake. They keep a Mac awake on a timer, a trigger or a toggle; Lidless is narrower on purpose, and only follows coding agents.
+Related tools: Amphetamine, the built-in `caffeinate`, Adrafinil and LidAwake. Lidless is narrower on purpose: it only follows coding agents.
 
 ## License
 
