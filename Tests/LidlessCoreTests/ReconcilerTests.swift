@@ -738,6 +738,34 @@ struct ReconcilerTimerTests {
         #expect(outcome.timerLidStopReason == .capReached)
     }
 
+    @Test func untilITurnItOffWithTheLidClosedStopsAtTheSixHourLimitOutOfTheBox() {
+        // The one hold with no end of its own, in a closed bag: the awake limit is its backstop.
+        let hold = timer(until: nil, lidClosed: true)
+        var state = EngineState()
+        state.awakeSince = at(0)
+
+        let justBefore = reconcile(at: 6 * 3600 - 10, power: onBattery, switches: hold, state: state)
+        #expect(justBefore.keepAwake == true)
+        #expect(justBefore.disableLidSleep == true)
+
+        let atTheLimit = reconcile(at: 6 * 3600, power: onBattery, switches: justBefore.switches, state: justBefore.state)
+        #expect(atTheLimit.keepAwake == false)
+        #expect(atTheLimit.disableLidSleep == false)
+        #expect(atTheLimit.switches.manualHold == nil)
+        #expect(atTheLimit.timerLidStopReason == .capReached)
+    }
+
+    @Test func thatLimitIsTheOneSetInSettings() {
+        var settings = LidlessSettings()
+        settings.maxAwakeDuration = 2 * 3600
+        var state = EngineState()
+        state.awakeSince = at(0)
+
+        let outcome = reconcile(at: 2 * 3600, settings: settings, switches: timer(until: nil, lidClosed: true), state: state)
+        #expect(outcome.disableLidSleep == false)
+        #expect(outcome.switches.manualHold == nil)
+    }
+
     @Test func theTimersLidOptionAndTheAgentsSwitchAreIndependent() {
         // The timer ends; the armed switch keeps the lid-closed run of a working agent going.
         let switches = Switches(manualHold: ManualHold(until: at(100), withLidClosed: true), lidArmed: true)
