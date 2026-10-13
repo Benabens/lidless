@@ -13,6 +13,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
     private var shownIcon: StatusIconState?
+    private var shownCountdown = ""
+    private var shownStatus = ""
 
     init(model: AppModel) {
         self.model = model
@@ -22,6 +24,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.autoenablesItems = false
         statusItem.menu = menu
         statusItem.button?.imagePosition = .imageLeading
+        statusItem.button?.setAccessibilityLabel("Lidless")
         statusItem.button?.font = .monospacedDigitSystemFont(
             ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular
         )
@@ -29,6 +32,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     /// Updates the icon and the optional countdown. The menu is rebuilt each time it opens.
+    /// This runs on every pass, so it only touches the button when something really changed:
+    /// each assignment costs a redraw, even with the same value.
     func refresh() {
         let icon = iconState
         if icon != shownIcon {
@@ -36,10 +41,16 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             shownIcon = icon
         }
         let countdown = model.showsTimerInMenuBar ? compactCountdown : ""
-        if statusItem.button?.title != countdown { statusItem.button?.title = countdown }
-        statusItem.button?.toolTip = statusLine
-        statusItem.button?.setAccessibilityLabel("Lidless")
-        statusItem.button?.setAccessibilityValue([statusLine, timerLine].compactMap { $0 }.joined(separator: ". "))
+        if countdown != shownCountdown {
+            statusItem.button?.title = countdown
+            shownCountdown = countdown
+        }
+        let status = [statusLine, timerLine].compactMap { $0 }.joined(separator: ". ")
+        if status != shownStatus {
+            statusItem.button?.toolTip = status
+            statusItem.button?.setAccessibilityValue(status)
+            shownStatus = status
+        }
     }
 
     private var iconState: StatusIconState {
