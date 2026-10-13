@@ -639,16 +639,44 @@ struct ReconcilerTimerTests {
         #expect(outcome.state.capTrippedAt == nil)
     }
 
-    @Test func theCapStartsCountingOnceTheTimerIsOver() {
+    @Test func aTimerDoesNotShieldTheAgentsFromTheCap() {
+        // A long timer must not let a stuck agent keep closed-lid mode going past the limit.
         var settings = LidlessSettings()
         settings.maxAwakeDuration = 3600
         settings.stallTimeout = 0
-        let busy = [session(working: 0)]
-        let duringTimer = reconcile(at: 7000, busy, settings: settings, switches: timer(until: 7200))
+        var state = EngineState()
+        state.awakeSince = at(0)
+        state.lidEngaged = true
+        let switches = Switches(manualHold: ManualHold(until: at(24 * 3600)), lidArmed: true)
 
-        let afterTimer = reconcile(at: 7200, busy, settings: settings, switches: duringTimer.switches, state: duringTimer.state)
-        #expect(afterTimer.keepAwake == true)
-        #expect(afterTimer.state.awakeSince == at(7200))
+        let outcome = reconcile(at: 3600, [session(working: 0)], settings: settings, switches: switches, state: state)
+        #expect(outcome.lidDisarmReason == .capReached)
+        #expect(outcome.disableLidSleep == false)
+        #expect(outcome.switches.lidArmed == false)
+        // The timer itself goes on: that is what the user asked for.
+        #expect(outcome.keepAwake == true)
+        #expect(outcome.status == .manual(until: at(24 * 3600)))
+        #expect(outcome.switches.manualHold != nil)
+
+        let later = reconcile(at: 3610, [session(working: 0)], settings: settings, switches: outcome.switches, state: outcome.state)
+        #expect(later.status == .manual(until: at(24 * 3600)))
+    }
+
+    @Test func theCapCountsTheAgentsTimeNotTheTimers() {
+        var settings = LidlessSettings()
+        settings.maxAwakeDuration = 3600
+        settings.stallTimeout = 0
+        let hold = timer(until: 5 * 3600)
+        let timerOnly = reconcile(at: 2 * 3600, settings: settings, switches: hold)
+        #expect(timerOnly.state.awakeSince == nil)
+
+        // An agent starts two hours into the timer: its own hour starts now.
+        let agentStarts = reconcile(
+            at: 2 * 3600 + 10, [session(working: 2 * 3600 + 5)],
+            settings: settings, switches: timerOnly.switches, state: timerOnly.state
+        )
+        #expect(agentStarts.state.awakeSince == at(2 * 3600 + 10))
+        #expect(agentStarts.status == .working(count: 1))
     }
 
     @Test func powerAdapterOnlyAppliesToTheTimerToo() {
@@ -744,6 +772,23 @@ struct ReconcilerPollingTests {
         settings.stallTimeout = 30 * 60
         let outcome = reconcile(at: 3 * 3600, [session(working: 0, lastEvent: 60)], settings: settings)
         #expect(outcome.needsPolling == false)
+    }
+
+    @Test func oneMorePassAfterTheCapEndsAHoldSoTheStatusDoesNotGoStale() {
+        var settings = LidlessSettings()
+        settings.maxAwakeDuration = 3600
+        var state = EngineState()
+        state.awakeSince = at(0)
+
+        let tripped = reconcile(
+            at: 3600, settings: settings, switches: Switches(manualHold: ManualHold(until: nil)), state: state
+        )
+        #expect(tripped.status == .suppressed(.capReached))
+        #expect(tripped.needsPolling == true)
+
+        let next = reconcile(at: 3610, settings: settings, switches: tripped.switches, state: tripped.state)
+        #expect(next.status == .idle)
+        #expect(next.needsPolling == false)
     }
 
     @Test func keepsPollingWhileTheCapHoldsAStuckSessionBack() {

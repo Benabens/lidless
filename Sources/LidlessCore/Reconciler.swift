@@ -115,7 +115,8 @@ public struct Outcome: Equatable, Sendable {
 public enum Reconciler {
     /// Idle sessions are forgotten after this long. A later event simply records them again.
     public static let idleRetention: TimeInterval = 24 * 3600
-    /// Passes run every few seconds; a gap this long means the Mac was asleep in between.
+    /// While Lidless keeps the Mac awake it runs a pass every few seconds, so a gap this long
+    /// in the middle of a hold means the Mac slept.
     public static let sleepGap: TimeInterval = 60
 
     public static func reconcile(_ input: ReconcilerInput) -> Outcome {
@@ -185,27 +186,34 @@ public enum Reconciler {
         case .working, .grace, .manual:
             if let reason = powerSuppression(input.power, settings: settings) {
                 status = .suppressed(reason)
-            } else if hold?.until != nil {
-                // A timer is its own limit. The cap guards open-ended wakefulness, and starts
-                // counting afresh once the timer is over.
-                keepAwake = true
                 state.awakeSince = nil
             } else {
-                let since = state.awakeSince ?? now
-                if now.timeIntervalSince(since) >= settings.maxAwakeDuration {
-                    state.capTrippedAt = now
-                    capTrippedNow = true
-                    switches.manualHold = nil
-                    status = .suppressed(.capReached)
+                // The cap measures wakefulness nobody put an end to: agents, and an open-ended
+                // hold. A timer has its own end, so it neither counts towards the cap nor shields
+                // the agents from it.
+                let isTimer = hold?.until != nil
+                let isOpenEnded = !working.isEmpty || graceUntil != nil || (hold != nil && !isTimer)
+                var heldOpenEnded = false
+                if isOpenEnded {
+                    let since = state.awakeSince ?? now
+                    if now.timeIntervalSince(since) >= settings.maxAwakeDuration {
+                        state.capTrippedAt = now
+                        state.awakeSince = nil
+                        capTrippedNow = true
+                        if !isTimer { switches.manualHold = nil }
+                        status = isTimer ? .manual(until: hold?.until) : .suppressed(.capReached)
+                    } else {
+                        state.awakeSince = since
+                        heldOpenEnded = true
+                    }
                 } else {
-                    state.awakeSince = since
-                    keepAwake = true
+                    state.awakeSince = nil
                 }
+                keepAwake = heldOpenEnded || isTimer
             }
         case .idle, .suppressed:
-            break
+            state.awakeSince = nil
         }
-        if !keepAwake { state.awakeSince = nil }
 
         // Closed-lid mode follows the agents: real work engages it, and the grace period merely
         // keeps it engaged. The user's hold has its own lid option, handled below.
@@ -230,7 +238,8 @@ public enum Reconciler {
         // The hold's lid option obeys the same guards, but ends with the hold, not with the agents.
         var timerLidStopReason: LidDisarmReason?
         if hold?.withLidClosed == true {
-            if capTrippedNow {
+            if switches.manualHold == nil {
+                // The cap just ended this open-ended hold.
                 timerLidStopReason = .capReached
             } else if let obstacle {
                 switches.manualHold?.withLidClosed = false
@@ -246,7 +255,8 @@ public enum Reconciler {
             lidDisarmReason: lidDisarmReason,
             timerLidStopReason: timerLidStopReason,
             timerExpired: timerExpired,
-            needsPolling: !active.isEmpty || graceEnd != nil || switches.manualHold != nil,
+            needsPolling: !active.isEmpty || graceEnd != nil || switches.manualHold != nil
+                || state.capTrippedAt != nil,
             status: status,
             switches: switches,
             sessions: live.sorted(by: menuOrder),
