@@ -192,6 +192,44 @@ struct HookConfigTests {
         #expect(try commands(in: cleaned) == ["Stop": ["say done"]])
     }
 
+    @Test func aHookOfTheUsersThatMerelyMentionsLidlessIsNotLidlessHook() throws {
+        let theirs = """
+        {
+          "hooks": {
+            "Stop": [
+              {
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "bash ~/bin/log-lidless-hook-calls.sh"
+                  },
+                  {
+                    "type": "command",
+                    "command": "/opt/tools/lidless-hook --my-own-flag"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        #expect(try HookConfig.uninstalling(from: theirs) == theirs)
+        #expect(HookConfig.containsLidlessHooks(in: theirs) == false)
+
+        let installed = try HookConfig.installing(claude, hookPath: hookPath, into: theirs)
+        #expect(try commands(in: installed)["Stop"] == [
+            "bash ~/bin/log-lidless-hook-calls.sh",
+            "/opt/tools/lidless-hook --my-own-flag",
+            "'\(hookPath)' claude stop",
+        ])
+        #expect(try HookConfig.uninstalling(from: installed) == theirs)
+    }
+
+    @Test func aFileThatCannotBeReadContainsNoLidlessHooks() {
+        #expect(HookConfig.containsLidlessHooks(in: "{ broken") == false)
+        #expect(HookConfig.containsLidlessHooks(in: "") == false)
+    }
+
     @Test func uninstallingAFileWithoutLidlessChangesNothing() throws {
         #expect(try HookConfig.uninstalling(from: busyClaudeSettings) == busyClaudeSettings)
     }

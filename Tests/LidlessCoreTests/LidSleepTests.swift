@@ -62,6 +62,19 @@ struct LidSleepControllerTests {
         #expect(pmset.calls == [true])
     }
 
+    @Test func stayingEngagedRefreshesTheHeartbeatTheWatchdogReads() throws {
+        let pmset = FakePowerManagement()
+        let controller = LidSleepController(powerManagement: pmset, marker: marker)
+        _ = controller.apply(disableLidSleep: true)
+        let longAgo = Date(timeIntervalSinceNow: -3600)
+        try FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: marker.path)
+
+        _ = controller.apply(disableLidSleep: true)
+
+        let touched = try #require(FileManager.default.attributesOfItem(atPath: marker.path)[.modificationDate] as? Date)
+        #expect(touched.timeIntervalSinceNow > -60)
+    }
+
     @Test func reappliesIfSomethingResetTheSettingBehindItsBack() {
         let pmset = FakePowerManagement()
         let controller = LidSleepController(powerManagement: pmset, marker: marker)
@@ -238,6 +251,28 @@ struct LidWatchdogTests {
         watchdog.waitUntilExit()
 
         #expect(!app.isRunning)
+        #expect(FileManager.default.fileExists(atPath: restored.path))
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    @Test func restoresSleepWhenTheAppHangsWithoutDying() throws {
+        // A frozen app stops refreshing the marker; nobody would turn sleep back on.
+        let directory = try TemporaryDirectory()
+        let marker = try directory.write("", to: "lid-sleep-disabled")
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -600)], ofItemAtPath: marker.path
+        )
+        let restored = directory.file("restored")
+        let app = try run("sleep 5")
+        defer { app.terminate() }
+
+        let watchdog = try run(LidWatchdog.script(
+            watching: app.processIdentifier, marker: marker.path,
+            restoreCommand: "/usr/bin/touch '\(restored.path)'", pollInterval: 0.1, staleAfter: 120
+        ))
+        watchdog.waitUntilExit()
+
+        #expect(app.isRunning)
         #expect(FileManager.default.fileExists(atPath: restored.path))
         #expect(!FileManager.default.fileExists(atPath: marker.path))
     }

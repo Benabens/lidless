@@ -79,8 +79,7 @@ public enum HookConfig {
         case unreadable
     }
 
-    /// A hook handler belongs to Lidless when its command runs this executable.
-    static let marker = "lidless-hook"
+    static let executableName = "lidless-hook"
 
     /// The configuration with Lidless's hooks added, replacing any earlier Lidless entries.
     /// `text` is `nil` or blank when the file does not exist yet.
@@ -117,8 +116,13 @@ public enum HookConfig {
         return document.text
     }
 
+    /// `false` for a file Lidless cannot read: it has nothing of ours that we could remove.
     public static func containsLidlessHooks(in text: String) -> Bool {
-        (try? uninstalling(from: text)) != text
+        do {
+            return try uninstalling(from: text) != text
+        } catch {
+            return false
+        }
     }
 
     public static func state(of spec: AgentHookSpec, hookPath: String, in text: String?) -> State {
@@ -206,20 +210,28 @@ public enum HookConfig {
         guard case let .object(fields) = handler, case let .string(command)? = fields["command"] else {
             return false
         }
-        return command.contains(marker)
+        return isLidlessCommand(command)
+    }
+
+    /// Whether `command` has exactly the shape `handler(for:)` writes: a quoted path to the
+    /// executable, an agent, an event. A hook of the user's that merely mentions Lidless is theirs.
+    static func isLidlessCommand(_ command: String) -> Bool {
+        let words = command.split(separator: " ", omittingEmptySubsequences: false)
+        guard words.count >= 3,
+              Agent(rawValue: String(words[words.count - 2])) != nil,
+              HookEvent(rawValue: String(words[words.count - 1])) != nil
+        else { return false }
+        let path = words.dropLast(2).joined(separator: " ")
+        return path.hasPrefix("'") && path.hasSuffix("/\(executableName)'")
     }
 
     private static func handler(for binding: AgentHookSpec.Binding, spec: AgentHookSpec, hookPath: String) -> JSONValue {
         var fields = JSONObject()
         if let name = spec.hookName { fields["name"] = .string(name) }
         fields["type"] = .string("command")
-        fields["command"] = .string("\(shellQuoted(hookPath)) \(spec.agent.rawValue) \(binding.event.rawValue)")
+        // Agents hand the command to a shell, and the path contains a space.
+        fields["command"] = .string("\(hookPath.shellQuoted) \(spec.agent.rawValue) \(binding.event.rawValue)")
         if let timeout = binding.timeout { fields["timeout"] = .number(String(timeout)) }
         return .object(fields)
-    }
-
-    /// Agents hand the command to a shell, and the path contains a space.
-    static func shellQuoted(_ string: String) -> String {
-        "'" + string.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

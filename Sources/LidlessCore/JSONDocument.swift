@@ -1,8 +1,10 @@
 import Foundation
 
 // Lidless edits configuration files it does not own. Foundation's JSON support would reorder the
-// keys and re-format the numbers of the whole file, so this is a small JSON model that keeps both
-// exactly as they were: re-serialising an untouched document gives the original text back.
+// keys and re-format the numbers of the whole file, so this is a small JSON model that keeps key
+// order, number spelling and indentation. For a file laid out the way `JSON.stringify` does it,
+// which is how the agents write theirs, re-serialising an untouched document gives the original
+// text back. A hand-formatted file keeps its content but is laid out that standard way.
 
 public enum JSONValue: Equatable, Sendable {
     case object(JSONObject)

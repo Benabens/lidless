@@ -41,7 +41,7 @@ public enum SudoersRule {
     public static func installScript(user: String, uid: UInt32) -> String {
         let lines = contents(user: user, uid: uid)
             .split(separator: "\n")
-            .map { HookConfig.shellQuoted(String($0)) }
+            .map { String($0).shellQuoted }
             .joined(separator: " ")
         return [
             "set -e",

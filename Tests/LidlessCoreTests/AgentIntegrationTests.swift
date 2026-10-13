@@ -79,6 +79,48 @@ struct AgentIntegrationTests {
         #expect(integration(.claude).status(hookPath: hookPath) == .notInstalled)
     }
 
+    @Test func aHandFormattedFileComesBackExactlyAsItWas() throws {
+        // Installing re-indents a file like this one; uninstalling must not leave it that way.
+        let handWritten = "{\"model\":\"opus\",   \"permissions\": {\"allow\": [\"Bash(ls:*)\", \"Read\"]},\n\t\"hooks\": {}\n}"
+        try home.write(handWritten, to: ".claude/settings.json")
+        let claude = integration(.claude)
+
+        try claude.install(hookPath: hookPath)
+        #expect(claude.status(hookPath: hookPath) == .installed)
+        try claude.uninstall()
+
+        #expect(try home.read(".claude/settings.json") == handWritten)
+    }
+
+    @Test func aFileThatWasAlreadyThereIsNeverDeleted() throws {
+        try home.write("{}\n", to: ".gemini/settings.json")
+
+        try integration(.gemini).install(hookPath: hookPath)
+        try integration(.gemini).uninstall()
+
+        #expect(try home.read(".gemini/settings.json") == "{}\n")
+    }
+
+    @Test func editsMadeWhileLidlessWasConnectedAreKept() throws {
+        try home.write(claudeSettings, to: ".claude/settings.json")
+        let claude = integration(.claude)
+        try claude.install(hookPath: hookPath)
+        let edited = try home.read(".claude/settings.json").replacingOccurrences(of: "\"opus\"", with: "\"sonnet\"")
+        try home.write(edited, to: ".claude/settings.json")
+
+        try claude.uninstall()
+
+        #expect(try home.read(".claude/settings.json") == claudeSettings.replacingOccurrences(of: "\"opus\"", with: "\"sonnet\""))
+    }
+
+    @Test func connectedMeansLidlessHooksArePresentEvenIfOutdated() {
+        #expect(AgentIntegration.Status.installed.isConnected)
+        #expect(AgentIntegration.Status.outdated.isConnected)
+        #expect(!AgentIntegration.Status.notInstalled.isConnected)
+        #expect(!AgentIntegration.Status.agentNotFound.isConnected)
+        #expect(!AgentIntegration.Status.unreadable.isConnected)
+    }
+
     @Test func theBackupIsAlwaysTheLastStateBeforeLidless() throws {
         try home.write(claudeSettings, to: ".claude/settings.json")
         let claude = integration(.claude)
@@ -221,7 +263,7 @@ struct AgentIntegrationTests {
         #expect(!home.exists(".codex/hooks.json"))
     }
 
-    @Test func aSymlinkedFileThatOnlyHeldLidlessIsEmptiedNotDeleted() throws {
+    @Test func aSymlinkedFileComesBackAsItWasAndStaysALink() throws {
         try home.write("", to: "dotfiles/gemini-settings.json")
         try FileManager.default.createDirectory(at: home.file(".gemini"), withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(
@@ -229,6 +271,22 @@ struct AgentIntegrationTests {
         )
 
         try integration(.gemini).install(hookPath: hookPath)
+        try integration(.gemini).uninstall()
+
+        #expect(try home.read("dotfiles/gemini-settings.json") == "")
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: home.file(".gemini/settings.json").path)) != nil)
+    }
+
+    @Test func aSymlinkToAFileLidlessHadToCreateIsEmptiedNotBroken() throws {
+        // The link points into a dotfiles folder where the file does not exist yet.
+        try FileManager.default.createDirectory(at: home.file("dotfiles"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home.file(".gemini"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: home.file(".gemini/settings.json"), withDestinationURL: home.file("dotfiles/gemini-settings.json")
+        )
+
+        try integration(.gemini).install(hookPath: hookPath)
+        #expect(try home.read("dotfiles/gemini-settings.json").contains("lidless-hook"))
         try integration(.gemini).uninstall()
 
         #expect(try home.read("dotfiles/gemini-settings.json") == "{}\n")

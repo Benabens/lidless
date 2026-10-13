@@ -26,6 +26,11 @@ public struct AgentIntegration: Sendable {
         case installed
         /// The configuration exists but Lidless will not touch it (not strict JSON, odd shape).
         case unreadable
+
+        /// Lidless's hooks are in the configuration, up to date or not.
+        public var isConnected: Bool {
+            self == .installed || self == .outdated
+        }
     }
 
     public let agent: Agent
@@ -49,7 +54,7 @@ public struct AgentIntegration: Sendable {
         }
     }
 
-    /// The configuration as it was before Lidless first changed it.
+    /// The configuration as it last was without Lidless in it.
     public var backupFile: URL {
         URL(fileURLWithPath: configFile.path + ".lidless.bak")
     }
@@ -97,14 +102,32 @@ public struct AgentIntegration: Sendable {
         let cleaned = try HookConfig.uninstalling(from: original)
         guard cleaned != original else { return }
 
-        if let cleaned {
+        if let backup = unchangedBackup(matching: cleaned) {
+            // Nothing but Lidless happened to the file: give back the very bytes it had.
+            try write(backup, to: target, mode: currentMode())
+        } else if let cleaned {
             try write(cleaned, to: target, mode: currentMode())
         } else if isSymbolicLink {
             // Somebody manages this file from elsewhere: empty it rather than break their link.
             try write("{}\n", to: target, mode: currentMode())
         } else {
-            // Lidless created this file, or it held nothing else: leave no trace.
+            // Lidless created this file: leave no trace.
             try FileManager.default.removeItem(at: configFile)
+        }
+    }
+
+    /// The backup, if adding and removing Lidless is all that separates it from the current
+    /// file. Rewriting normalises a hand-formatted file's layout, and only the backup remembers
+    /// what it looked like.
+    private func unchangedBackup(matching cleaned: String?) -> String? {
+        guard let backup = try? String(contentsOf: backupFile, encoding: .utf8) else { return nil }
+        do {
+            let roundTrip = try HookConfig.uninstalling(
+                from: HookConfig.installing(spec, hookPath: "/\(HookConfig.executableName)", into: backup)
+            )
+            return roundTrip == cleaned ? backup : nil
+        } catch {
+            return nil
         }
     }
 
@@ -123,8 +146,14 @@ public struct AgentIntegration: Sendable {
     // MARK: - File access
 
     /// Where the bytes really live: a symlinked configuration is edited in place, not replaced.
+    /// Followed by hand because a link to a file that does not exist yet must be honoured too.
     private var target: URL {
-        configFile.resolvingSymlinksInPath()
+        var url = configFile
+        for _ in 0..<8 {
+            guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else { break }
+            url = URL(fileURLWithPath: destination, relativeTo: url.deletingLastPathComponent()).standardizedFileURL
+        }
+        return url
     }
 
     private var isSymbolicLink: Bool {

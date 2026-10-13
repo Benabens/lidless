@@ -60,8 +60,11 @@ public struct LidSleepController: Sendable {
     }
 
     private func engage() -> Result {
+        // An unreadable setting counts as "not disabled": closed-lid mode must still work then.
         let alreadyDisabled = powerManagement.sleepDisabled() == true
         if ownsTheSetting {
+            // The watchdog takes a marker that stops being refreshed for a frozen app.
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: marker.path)
             if alreadyDisabled { return .engaged }
             return powerManagement.setSleepDisabled(true) ? .engaged : .failed
         }
@@ -91,18 +94,24 @@ public struct LidSleepController: Sendable {
     }
 }
 
-/// A shell script that outlives the app: if Lidless dies while sleep is disabled (crash, force
-/// quit), it re-enables sleep so the Mac is never left awake with its lid closed for nothing.
+/// A shell script that outlives the app. If Lidless dies (crash, force quit) or stops responding
+/// while sleep is disabled, it re-enables sleep, so the Mac is never left awake with its lid
+/// closed for nothing. "Responding" means the marker file keeps being refreshed.
 public enum LidWatchdog {
     public static func script(
         watching pid: Int32,
         marker: String,
         restoreCommand: String = PMSet.command(disablingSleep: false).joined(separator: " "),
-        pollInterval: Double = 2
+        pollInterval: Double = 2,
+        staleAfter: Int = 120
     ) -> String {
-        let quotedMarker = HookConfig.shellQuoted(marker)
+        let quotedMarker = marker.shellQuoted
         return """
-        while /bin/kill -0 \(pid) 2>/dev/null; do /bin/sleep \(pollInterval); done
+        while /bin/kill -0 \(pid) 2>/dev/null; do
+          /bin/sleep \(pollInterval)
+          modified=$(/usr/bin/stat -f %m \(quotedMarker) 2>/dev/null) || exit 0
+          [ $(( $(/bin/date +%s) - modified )) -gt \(staleAfter) ] && break
+        done
         [ -e \(quotedMarker) ] || exit 0
         \(restoreCommand) && /bin/rm -f \(quotedMarker)
         """
