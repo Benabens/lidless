@@ -29,7 +29,7 @@ Not everything is an agent. **Keep Awake For** in the menu holds the Mac awake f
 
 - The menu shows the time left, and **Show the timer in the menu bar** in Settings puts it next to the icon.
 - **Stop** ends it at once. When it ends by itself you get a quiet notification; if an agent is still working, Lidless simply goes on following it.
-- **Also with Lid Closed** extends the hold to a closed lid, through the same `pmset` switch as closed-lid mode and under the same guards: battery level, heat, the watchdog. It needs the same one-time setup.
+- **Also with Lid Closed** extends the hold to a closed lid, through the same `pmset` switch as closed-lid mode and under the same guards: battery level, heat, the watchdog. It needs the same one-time setup, and it is never remembered: it unchecks itself when the hold ends, so each lid-closed timer is a choice you make.
 - A timer is its own limit, so the awake limit does not cut it short. *Until I Turn It Off* has no end of its own and stays subject to it.
 
 ## Requirements
