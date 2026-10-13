@@ -1,7 +1,7 @@
 import Foundation
 
 /// User-tunable behaviour. Durations are in seconds.
-public struct LidlessSettings: Codable, Equatable, Sendable {
+public struct LidlessSettings: Equatable, Sendable {
     public var trackedAgents: Set<Agent>
     /// How long to stay awake after the last turn ends, so back-to-back turns do not race sleep.
     public var gracePeriod: TimeInterval

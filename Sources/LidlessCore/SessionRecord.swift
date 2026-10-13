@@ -17,7 +17,6 @@ public struct SessionRecord: Codable, Equatable, Identifiable, Sendable {
     public var processStart: Date?
     public var state: SessionState
     public var cwd: String?
-    public var startedAt: Date
     /// When the current turn began. `nil` while idle.
     public var workingSince: Date?
     /// When the last turn ended. `nil` while working, or if the session never worked.
@@ -32,7 +31,6 @@ public struct SessionRecord: Codable, Equatable, Identifiable, Sendable {
         processStart: Date?,
         state: SessionState,
         cwd: String?,
-        startedAt: Date,
         workingSince: Date?,
         idleSince: Date?,
         updatedAt: Date
@@ -43,10 +41,17 @@ public struct SessionRecord: Codable, Equatable, Identifiable, Sendable {
         self.processStart = processStart
         self.state = state
         self.cwd = cwd
-        self.startedAt = startedAt
         self.workingSince = workingSince
         self.idleSince = idleSince
         self.updatedAt = updatedAt
+    }
+}
+
+extension SessionRecord {
+    /// Mid-turn but silent for `timeout`: probably interrupted, which agents do not report.
+    /// A `timeout` of 0 means sessions never stall.
+    public func isStalled(at now: Date, timeout: TimeInterval) -> Bool {
+        state == .working && timeout > 0 && now.timeIntervalSince(updatedAt) >= timeout
     }
 }
 

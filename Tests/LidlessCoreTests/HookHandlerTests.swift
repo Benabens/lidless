@@ -51,7 +51,6 @@ struct HookHandlerTests {
         #expect(session.state == .idle)
         #expect(session.workingSince == nil)
         #expect(session.idleSince == at(90))
-        #expect(session.startedAt == at(5))
     }
 
     @Test func activityRevivesAnIdleSession() throws {

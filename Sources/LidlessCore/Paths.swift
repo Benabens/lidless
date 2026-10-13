@@ -4,10 +4,6 @@ import Foundation
 public struct LidlessPaths: Sendable {
     public let supportDirectory: URL
 
-    public init(supportDirectory: URL) {
-        self.supportDirectory = supportDirectory
-    }
-
     /// `LIDLESS_SUPPORT_DIR` overrides the default location, for tests and sandboxes.
     public init(
         home: URL = FileManager.default.homeDirectoryForCurrentUser,

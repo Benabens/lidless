@@ -62,7 +62,6 @@ public struct HookHandler: Sendable {
             processStart: context.processStart,
             state: .idle,
             cwd: context.cwd,
-            startedAt: context.now,
             workingSince: nil,
             idleSince: nil,
             updatedAt: context.now

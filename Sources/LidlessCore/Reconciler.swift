@@ -4,16 +4,29 @@ import Foundation
 public struct EngineState: Equatable, Sendable {
     /// Start of the current uninterrupted stretch of wakefulness.
     public var awakeSince: Date?
-    /// Set when the safety cap released the Mac. Turns that were already running at that moment
-    /// are ignored until they end, so a stuck session cannot immediately re-acquire the hold.
+    /// Set when the safety cap released the Mac. Whatever was already asking for wakefulness at
+    /// that moment is ignored until it ends, so a stuck session cannot re-acquire the hold.
     public var capTrippedAt: Date?
     /// Closed-lid mode has been active since it was armed, so the end of work should disarm it.
     public var lidEngaged: Bool
+    /// The last moment a session was working. The grace period counts from here, which keeps it
+    /// running after the session's record is gone (session closed, process exited).
+    public var lastWorkAt: Date?
+    /// When the previous pass ran. A long gap means the Mac slept in between.
+    public var lastPassAt: Date?
 
-    public init(awakeSince: Date? = nil, capTrippedAt: Date? = nil, lidEngaged: Bool = false) {
+    public init(
+        awakeSince: Date? = nil,
+        capTrippedAt: Date? = nil,
+        lidEngaged: Bool = false,
+        lastWorkAt: Date? = nil,
+        lastPassAt: Date? = nil
+    ) {
         self.awakeSince = awakeSince
         self.capTrippedAt = capTrippedAt
         self.lidEngaged = lidEngaged
+        self.lastWorkAt = lastWorkAt
+        self.lastPassAt = lastPassAt
     }
 }
 
@@ -86,16 +99,24 @@ public struct Outcome: Equatable, Sendable {
 }
 
 /// Decides, from a snapshot of the world, whether the Mac should be kept awake.
-/// Pure: same input, same outcome. All side effects live in the app.
+/// Pure: same input, same outcome. It changes nothing itself; the caller applies the outcome.
 public enum Reconciler {
     /// Idle sessions are forgotten after this long. A later event simply records them again.
     public static let idleRetention: TimeInterval = 24 * 3600
+    /// Passes run every few seconds; a gap this long means the Mac was asleep in between.
+    public static let sleepGap: TimeInterval = 60
 
     public static func reconcile(_ input: ReconcilerInput) -> Outcome {
         let settings = input.settings
         let now = input.now
         var state = input.state
         var switches = input.switches
+
+        // Time asleep is not time kept awake: sleeping ends the stretch the cap measures.
+        if let lastPass = state.lastPassAt, now.timeIntervalSince(lastPass) > sleepGap {
+            state.awakeSince = nil
+        }
+        state.lastPassAt = now
 
         let isStale = { (session: ObservedSession) in
             !session.isAlive || (session.record.state == .idle
@@ -106,21 +127,24 @@ public enum Reconciler {
             .filter { !isStale($0) && settings.trackedAgents.contains($0.record.agent) }
             .map(\.record)
 
-        // Who is really working: not stalled, and not a turn the safety cap already gave up on.
-        var working = live.filter { $0.state == .working && !isStalled($0, now: now, settings: settings) }
-        var capStillApplies = false
-        if let trippedAt = state.capTrippedAt {
-            let fresh = working.filter { ($0.workingSince ?? $0.updatedAt) > trippedAt }
-            capStillApplies = fresh.count < working.count
-            working = fresh
-            if !capStillApplies { state.capTrippedAt = nil }
-        }
+        // After the cap trips, only what began later counts.
+        let trippedAt = state.capTrippedAt
+        let isAfterCap = { (instant: Date) in trippedAt.map { instant > $0 } ?? true }
 
-        let graceUntil = live
-            .compactMap { $0.state == .idle ? $0.idleSince : nil }
-            .map { $0.addingTimeInterval(settings.gracePeriod) }
-            .max()
-            .flatMap { $0 > now ? $0 : nil }
+        let active = live.filter { $0.state == .working && !$0.isStalled(at: now, timeout: settings.stallTimeout) }
+        let working = active.filter { isAfterCap($0.workingSince ?? $0.updatedAt) }
+
+        // The grace period runs from the last moment of work: now if someone is working, else
+        // the end of the most recent turn.
+        let turnEnds = live.compactMap { $0.state == .idle ? $0.idleSince : nil }.map { min($0, now) }
+        let lastWork = ([state.lastWorkAt] + turnEnds + [working.isEmpty ? nil : now]).compactMap { $0 }.max()
+        state.lastWorkAt = lastWork
+        let graceEnd = lastWork.map { $0.addingTimeInterval(settings.gracePeriod) }.flatMap { $0 > now ? $0 : nil }
+        let graceUntil = lastWork.flatMap { isAfterCap($0) ? graceEnd : nil }
+
+        // The cap stays tripped for as long as something from before it still asks.
+        let capStillApplies = trippedAt != nil && (working.count < active.count || (graceEnd != nil && graceUntil == nil))
+        if !capStillApplies { state.capTrippedAt = nil }
 
         var status: Status
         if !working.isEmpty {
@@ -158,17 +182,16 @@ public enum Reconciler {
         }
         if !keepAwake { state.awakeSince = nil }
 
-        // Closed-lid mode follows the agents only: "Keep Awake Anyway" never engages it.
+        // Closed-lid mode follows the agents only: "Keep Awake Anyway" never engages it. Real
+        // work engages it; the grace period merely keeps it engaged.
         var disableLidSleep = false
         var lidDisarmReason: LidDisarmReason?
         if switches.lidArmed {
-            if !input.power.isOnAC {
-                lidDisarmReason = .onBattery
-            } else if let percent = input.power.batteryPercent, percent < settings.batteryFloor {
-                lidDisarmReason = .lowBattery
+            if let obstacle = lidObstacle(power: input.power, settings: settings) {
+                lidDisarmReason = obstacle
             } else if capTrippedNow {
                 lidDisarmReason = .capReached
-            } else if !working.isEmpty || graceUntil != nil {
+            } else if !working.isEmpty || (state.lidEngaged && graceUntil != nil) {
                 disableLidSleep = true
                 state.lidEngaged = true
             } else if state.lidEngaged {
@@ -190,8 +213,11 @@ public enum Reconciler {
         )
     }
 
-    private static func isStalled(_ session: SessionRecord, now: Date, settings: LidlessSettings) -> Bool {
-        settings.stallTimeout > 0 && now.timeIntervalSince(session.updatedAt) >= settings.stallTimeout
+    /// What rules closed-lid mode out right now, whoever is working. `nil` when it may be armed.
+    public static func lidObstacle(power: PowerState, settings: LidlessSettings) -> LidDisarmReason? {
+        if !power.isOnAC { return .onBattery }
+        if let percent = power.batteryPercent, percent < settings.batteryFloor { return .lowBattery }
+        return nil
     }
 
     private static func powerSuppression(_ power: PowerState, settings: LidlessSettings) -> SuppressReason? {

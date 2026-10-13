@@ -23,7 +23,6 @@ private func session(
             processStart: nil,
             state: since != nil ? .working : .idle,
             cwd: "/tmp/project",
-            startedAt: t0,
             workingSince: since.map(at),
             idleSince: idleSince.map(at),
             updatedAt: at(updated)
@@ -32,15 +31,20 @@ private func session(
     )
 }
 
+/// One reconciler pass. Unless told otherwise the previous pass happened 10 seconds earlier, as it
+/// does in the running app.
 private func reconcile(
     at seconds: TimeInterval,
     _ sessions: [ObservedSession] = [],
     power: PowerState = PowerState(isOnAC: true, batteryPercent: 100),
     settings: LidlessSettings = LidlessSettings(),
     switches: Switches = Switches(),
-    state: EngineState = EngineState()
+    state: EngineState = EngineState(),
+    sincePreviousPass: TimeInterval = 10
 ) -> Outcome {
-    Reconciler.reconcile(
+    var state = state
+    state.lastPassAt = at(seconds - sincePreviousPass)
+    return Reconciler.reconcile(
         ReconcilerInput(
             now: at(seconds),
             sessions: sessions,
@@ -89,6 +93,25 @@ struct ReconcilerDemandTests {
         let outcome = reconcile(at: 100 + 120, [session(idle: 100)], settings: settings)
         #expect(outcome.keepAwake == false)
         #expect(outcome.status == .idle)
+    }
+
+    @Test func theGracePeriodOutlivesTheSessionItself() {
+        // A scripted loop of one-shot agent runs: each run ends its session, or simply exits.
+        var settings = LidlessSettings()
+        settings.gracePeriod = 120
+        let working = reconcile(at: 100, [session(working: 0, lastEvent: 95)], settings: settings)
+
+        let sessionClosed = reconcile(at: 110, [], settings: settings, state: working.state)
+        #expect(sessionClosed.keepAwake == true)
+        #expect(sessionClosed.status == .grace(until: at(220)))
+
+        let processDied = reconcile(
+            at: 110, [session(working: 0, lastEvent: 95, alive: false)], settings: settings, state: working.state
+        )
+        #expect(processDied.keepAwake == true)
+
+        let later = reconcile(at: 220, [], settings: settings, state: sessionClosed.state)
+        #expect(later.keepAwake == false)
     }
 
     @Test func aSessionThatNeverWorkedGrantsNoGrace() {
@@ -209,11 +232,46 @@ struct ReconcilerSafetyTests {
         let first = reconcile(at: 10, [session(working: 0)])
         #expect(first.state.awakeSince == at(10))
 
-        let later = reconcile(at: 500, [session(working: 0, lastEvent: 490)], state: first.state)
+        let later = reconcile(at: 20, [session(working: 0, lastEvent: 15)], state: first.state)
         #expect(later.state.awakeSince == at(10))
 
-        let asleep = reconcile(at: 600, [], state: later.state)
+        let asleep = reconcile(at: 30, [], settings: LidlessSettings(gracePeriod: 0), state: later.state)
         #expect(asleep.state.awakeSince == nil)
+    }
+
+    @Test func timeSpentAsleepDoesNotCountTowardsTheCap() {
+        // The lid was closed overnight in the middle of a turn; the session resumes on wake.
+        var settings = LidlessSettings()
+        settings.maxAwakeDuration = 6 * 3600
+        settings.stallTimeout = 0
+        let evening = reconcile(at: 100, [session(working: 0)], settings: settings)
+
+        let morning = reconcile(
+            at: 9 * 3600, [session(working: 0)],
+            settings: settings, state: evening.state, sincePreviousPass: 9 * 3600 - 100
+        )
+        #expect(morning.keepAwake == true)
+        #expect(morning.state.awakeSince == at(9 * 3600))
+    }
+
+    @Test func aCapReachedDuringTheGracePeriodIsNotUndoneOnTheNextPass() {
+        var settings = LidlessSettings()
+        settings.maxAwakeDuration = 3600
+        settings.gracePeriod = 900
+        var state = EngineState()
+        state.awakeSince = at(0)
+
+        let tripped = reconcile(at: 3600, [session(idle: 3500)], settings: settings, state: state)
+        #expect(tripped.keepAwake == false)
+
+        let next = reconcile(at: 3610, [session(idle: 3500)], settings: settings, state: tripped.state)
+        #expect(next.keepAwake == false)
+        #expect(next.status == .suppressed(.capReached))
+
+        // Once that grace period would have ended anyway, nothing is held against the future.
+        let over = reconcile(at: 3500 + 900, [session(idle: 3500)], settings: settings, state: next.state)
+        #expect(over.status == .idle)
+        #expect(over.state.capTrippedAt == nil)
     }
 
     @Test func theSafetyCapReleasesEverythingAndTurnsOffKeepAwakeAnyway() {
@@ -272,13 +330,22 @@ struct ReconcilerSafetyTests {
         let tripped = reconcile(at: 3600, [session(working: 0)], settings: settings, state: state)
         let stopped = reconcile(at: 3700, [session(idle: 3650)], settings: settings, state: tripped.state)
         #expect(stopped.status == .idle)
-        #expect(stopped.state == EngineState())
+        #expect(stopped.state.capTrippedAt == nil)
+        #expect(stopped.state.awakeSince == nil)
     }
 }
 
 @Suite("Reconciler — closed-lid mode")
 struct ReconcilerLidTests {
     private let armed = Switches(lidArmed: true)
+
+    @Test func saysWhatStandsInTheWayOfArming() {
+        let settings = LidlessSettings(batteryFloor: 20)
+        #expect(Reconciler.lidObstacle(power: PowerState(isOnAC: true, batteryPercent: 80), settings: settings) == nil)
+        #expect(Reconciler.lidObstacle(power: PowerState(isOnAC: true, batteryPercent: nil), settings: settings) == nil)
+        #expect(Reconciler.lidObstacle(power: PowerState(isOnAC: false, batteryPercent: 80), settings: settings) == .onBattery)
+        #expect(Reconciler.lidObstacle(power: PowerState(isOnAC: true, batteryPercent: 19), settings: settings) == .lowBattery)
+    }
 
     @Test func neverTouchesLidSleepUnlessArmed() {
         let outcome = reconcile(at: 30, [session(working: 0)])
@@ -320,14 +387,39 @@ struct ReconcilerLidTests {
         #expect(done.lidDisarmReason == .workFinished)
     }
 
-    @Test func disarmsWhenTheAgentProcessDies() {
-        let engaged = reconcile(at: 30, [session(working: 0)], switches: armed)
-        let gone = reconcile(
+    @Test func disarmsAfterTheGracePeriodWhenTheAgentProcessDies() {
+        var settings = LidlessSettings()
+        settings.gracePeriod = 120
+        let engaged = reconcile(at: 30, [session(working: 0)], settings: settings, switches: armed)
+        let justDied = reconcile(
             at: 40, [session(working: 0, alive: false)],
-            switches: engaged.switches, state: engaged.state
+            settings: settings, switches: engaged.switches, state: engaged.state
         )
+        #expect(justDied.disableLidSleep == true)
+
+        let gone = reconcile(at: 30 + 120, [], settings: settings, switches: justDied.switches, state: justDied.state)
         #expect(gone.disableLidSleep == false)
         #expect(gone.lidDisarmReason == .workFinished)
+    }
+
+    @Test func armingDuringALeftoverGracePeriodWaitsForRealWork() {
+        // The last turn ended a moment ago; the user arms the switch before starting the next run.
+        var settings = LidlessSettings()
+        settings.gracePeriod = 120
+        let leftover = [session(idle: 100)]
+
+        let justArmed = reconcile(at: 130, leftover, settings: settings, switches: armed)
+        #expect(justArmed.disableLidSleep == false)
+        #expect(justArmed.switches.lidArmed == true)
+
+        let graceOver = reconcile(at: 230, leftover, settings: settings, switches: justArmed.switches, state: justArmed.state)
+        #expect(graceOver.switches.lidArmed == true)
+        #expect(graceOver.lidDisarmReason == nil)
+
+        let working = reconcile(
+            at: 300, [session(working: 290)], settings: settings, switches: graceOver.switches, state: graceOver.state
+        )
+        #expect(working.disableLidSleep == true)
     }
 
     @Test func disarmsTheMomentTheMacGoesOnBattery() {
