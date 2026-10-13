@@ -32,9 +32,7 @@ struct SettingsView: View {
     @ViewBuilder
     private func agentRow(_ agent: Agent) -> some View {
         let status = model.integrationStatus[agent] ?? .agentNotFound
-        let isOn = status == .installed || status == .outdated
-
-        Toggle(isOn: Binding(get: { isOn }, set: { model.setIntegration(agent, enabled: $0) })) {
+        Toggle(isOn: Binding(get: { status.isConnected }, set: { model.setIntegration(agent, enabled: $0) })) {
             Text(agent.displayName)
             Text(caption(for: agent, status: status))
         }
@@ -45,7 +43,7 @@ struct SettingsView: View {
                 Button("Update") { model.setIntegration(agent, enabled: true) }
             }
         }
-        if agent == .codex, isOn {
+        if agent == .codex, status.isConnected {
             note(model.codexHasInlineHooks
                 ? "Codex asks you to review new hooks the next time it starts. It will also warn that hooks come from both hooks.json and config.toml."
                 : "Codex asks you to review new hooks the next time it starts. Choose “Trust all and continue”.")
@@ -109,21 +107,21 @@ struct SettingsView: View {
     private var closedLidSection: some View {
         Section {
             LabeledContent {
-                Button(model.helperRuleInstalled ? "Remove…" : "Install…") {
-                    if model.helperRuleInstalled {
-                        model.removeHelperRule()
+                Button(model.sudoersRuleInstalled ? "Remove…" : "Install…") {
+                    if model.sudoersRuleInstalled {
+                        model.removeSudoersRule()
                     } else {
-                        model.installHelperRule()
+                        model.installSudoersRule()
                     }
                 }
-                .disabled(model.helperBusy)
+                .disabled(model.sudoersRuleBusy)
             } label: {
                 Text("Password-free sleep switch")
-                Text(model.helperRuleInstalled
+                Text(model.sudoersRuleInstalled
                     ? "Installed at /etc/sudoers.d/lidless"
                     : "Needed before closed-lid mode can be armed")
             }
-            if let error = model.helperError {
+            if let error = model.sudoersRuleError {
                 problem(error)
             }
         } header: {

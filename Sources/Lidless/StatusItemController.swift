@@ -89,7 +89,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             menu.addItem(sessionItem(session, now: now))
         }
         if sessions.count > limit {
-            menu.addItem(info("\(sessions.count - limit) more idle"))
+            menu.addItem(info("\(sessions.count - limit) more"))
         }
     }
 
@@ -121,8 +121,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func activity(of session: SessionRecord, now: Date) -> (text: String, isWorking: Bool) {
         switch session.state {
         case .working:
-            let stall = model.settings.stallTimeout
-            if stall > 0, now.timeIntervalSince(session.updatedAt) >= stall {
+            if session.isStalled(at: now, timeout: model.settings.stallTimeout) {
                 return ("No activity for \(Self.duration(from: session.updatedAt, to: now))", false)
             }
             return ("Working for \(Self.duration(from: session.workingSince ?? session.updatedAt, to: now))", true)
@@ -132,7 +131,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func lidItem() -> NSMenuItem {
-        guard model.helperRuleInstalled else {
+        guard model.sudoersRuleInstalled else {
             let setUp = action("Set Up Closed-Lid Mode…", #selector(openSettings))
             describe(setUp, "One-time setup in Settings")
             return setUp

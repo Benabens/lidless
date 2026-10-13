@@ -42,32 +42,40 @@ struct SystemPowerManagement: PowerManagement {
 
 /// Runs a shell script as root through the standard macOS administrator prompt.
 enum AdministratorPrompt {
-    /// `completion` is called on the main actor with `nil` on success, or what went wrong.
-    static func run(_ script: String, prompt: String, completion: @escaping @MainActor (String?) -> Void) {
+    enum Result {
+        case succeeded
+        /// The user dismissed the password prompt.
+        case cancelled
+        case failed(String)
+    }
+
+    /// `completion` is called on the main actor once the script has run or the prompt is dismissed.
+    static func run(_ script: String, prompt: String, completion: @escaping @MainActor (Result) -> Void) {
         let appleScript = SudoersRule.appleScript(running: script, prompt: prompt)
         DispatchQueue.global(qos: .userInitiated).async {
-            let process = Process()
-            let errors = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", appleScript]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = errors
-            var failure: String?
-            do {
-                try process.run()
-                let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                process.waitUntilExit()
-                if process.terminationStatus != 0 {
-                    // -128 is "User canceled": not an error worth reporting.
-                    failure = message.contains("-128") ? "" : message.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            } catch {
-                failure = error.localizedDescription
-            }
-            let result = failure
+            let result = execute(appleScript)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { completion(result) }
             }
         }
+    }
+
+    private static func execute(_ appleScript: String) -> Result {
+        let process = Process()
+        let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", appleScript]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = errors
+        do {
+            try process.run()
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+        let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        guard process.terminationStatus != 0 else { return .succeeded }
+        // AppleScript reports a dismissed prompt as error -128, "User canceled".
+        return message.contains("-128") ? .cancelled : .failed(message.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

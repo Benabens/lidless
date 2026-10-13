@@ -66,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func refreshSettings() {
         model.refreshIntegrations()
-        model.refreshHelperRule()
+        model.refreshSudoersRule()
         model.refreshLoginItem()
     }
 

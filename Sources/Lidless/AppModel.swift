@@ -3,7 +3,7 @@ import LidlessCore
 import ServiceManagement
 
 /// Glue between the pure reconciler and the Mac: gathers the inputs, runs a pass, applies the
-/// effects, and publishes what the menu and the settings window show.
+/// outcome, and publishes what the menu and the settings window show.
 @MainActor
 final class AppModel: ObservableObject {
     static let reconcileInterval: TimeInterval = 10
@@ -27,9 +27,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var integrationErrors: [Agent: String] = [:]
     @Published private(set) var codexHasInlineHooks = false
 
-    @Published private(set) var helperRuleInstalled = false
-    @Published private(set) var helperError: String?
-    @Published private(set) var helperBusy = false
+    @Published private(set) var sudoersRuleInstalled = false
+    @Published private(set) var sudoersRuleError: String?
+    @Published private(set) var sudoersRuleBusy = false
 
     @Published private(set) var opensAtLogin = false
     @Published private(set) var loginItemError: String?
@@ -44,17 +44,18 @@ final class AppModel: ObservableObject {
     private let assertion = SleepAssertion()
     private let powerMonitor = PowerMonitor()
     private let watcher = DirectoryWatcher()
+    private let watchdog: LidWatchdogProcess
 
     private var switches = Switches()
     private var engineState = EngineState()
     private var timer: Timer?
-    private var watchdog: Process?
     private var wakeObserver: NSObjectProtocol?
     private var pendingReconcile = false
 
     init() {
         store = SessionStore(directory: paths.sessionsDirectory)
         lidSleep = LidSleepController(powerManagement: SystemPowerManagement(), marker: paths.lidSleepMarker)
+        watchdog = LidWatchdogProcess(marker: paths.lidSleepMarker)
         settings = SettingsStorage.load()
         power = PowerMonitor.currentState()
         outcome = Reconciler.reconcile(ReconcilerInput(
@@ -69,9 +70,9 @@ final class AppModel: ObservableObject {
         // A previous run may have died with sleep disabled: put it back before anything else.
         _ = lidSleep.apply(disableLidSleep: false)
 
-        provisionHook()
+        HookProvisioner.provision(to: paths.installedHook)
         refreshIntegrations()
-        refreshHelperRule()
+        refreshSudoersRule()
         refreshLoginItem()
 
         watcher.start(watching: paths.sessionsDirectory) { [weak self] in
@@ -100,9 +101,12 @@ final class AppModel: ObservableObject {
         timer?.invalidate()
         watcher.stop()
         powerMonitor.stop()
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
         assertion.set(held: false, reason: "")
         _ = lidSleep.apply(disableLidSleep: false)
-        stopWatchdog()
+        watchdog.stop()
     }
 
     // MARK: - Reconciliation
@@ -127,35 +131,34 @@ final class AppModel: ObservableObject {
             )
         }
         let currentPower = PowerMonitor.currentState()
-        var result = Reconciler.reconcile(ReconcilerInput(
-            now: Date(),
-            sessions: observed,
-            power: currentPower,
-            settings: settings,
-            switches: switches,
-            state: engineState
-        ))
-        result.staleSessionIDs.forEach(store.remove)
+        func pass() -> Outcome {
+            Reconciler.reconcile(ReconcilerInput(
+                now: Date(), sessions: observed, power: currentPower,
+                settings: settings, switches: switches, state: engineState
+            ))
+        }
 
+        var result = pass()
+        var lidResult = lidSleep.apply(disableLidSleep: result.disableLidSleep)
+        var notice = result.lidDisarmReason.map(describe)
+
+        if result.disableLidSleep, lidResult == .failed {
+            // pmset refused, so there is nothing to arm: switch it off and decide again.
+            switches.lidArmed = false
+            result = pass()
+            lidResult = lidSleep.apply(disableLidSleep: false)
+            notice = "Closed-lid mode could not change the sleep setting. Check the rule in Settings."
+        } else if lidResult == .failed {
+            // Sleep is still disabled and Lidless cannot undo it: the one thing the user must know.
+            notice = "Lidless could not turn sleep back on. Run “sudo pmset -a disablesleep 0” in Terminal."
+        }
+
+        result.staleSessionIDs.forEach(store.remove)
         assertion.set(
             held: result.keepAwake,
             reason: result.status == .manual ? "Lidless: kept awake by the user" : "Lidless: a coding agent is working"
         )
-
-        var notice = result.lidDisarmReason.map(describe)
-        let lidResult = lidSleep.apply(disableLidSleep: result.disableLidSleep)
-        if result.disableLidSleep, lidResult == .failed {
-            // Without the sudoers rule there is nothing to arm: say so instead of pretending.
-            result.switches.lidArmed = false
-            result.state.lidEngaged = false
-            result.disableLidSleep = false
-            notice = "Closed-lid mode could not change the sleep setting. Check the rule in Settings."
-        }
-        if !result.disableLidSleep, lidResult == .failed {
-            // Sleep is still disabled and Lidless cannot undo it: the one thing the user must know.
-            notice = "Lidless could not turn sleep back on. Run “sudo pmset -a disablesleep 0” in Terminal."
-        }
-        if lidResult == .engaged { startWatchdog() } else if !lidSleep.ownsTheSetting { stopWatchdog() }
+        if lidSleep.ownsTheSetting { watchdog.start() } else { watchdog.stop() }
 
         switches = result.switches
         engineState = result.state
@@ -189,76 +192,24 @@ final class AppModel: ObservableObject {
 
     /// Why closed-lid mode cannot be armed right now, if it cannot.
     var lidArmingObstacle: String? {
-        if !power.isOnAC { return "Needs the power adapter" }
-        if let percent = power.batteryPercent, percent < settings.batteryFloor {
-            return "Battery below \(settings.batteryFloor)%"
+        switch Reconciler.lidObstacle(power: power, settings: settings) {
+        case .onBattery: "Needs the power adapter"
+        case .lowBattery: "Battery below \(settings.batteryFloor)%"
+        default: nil
         }
-        return nil
     }
 
     func toggleLidArmed() {
-        if switches.lidArmed {
-            switches.lidArmed = false
-        } else {
-            guard helperRuleInstalled else {
-                onOpenSettings?()
-                return
-            }
-            switches.lidArmed = true
-            engineState.lidEngaged = false
+        guard switches.lidArmed || sudoersRuleInstalled else {
+            onOpenSettings?()
+            return
         }
+        switches.lidArmed.toggle()
         lidNotice = nil
         reconcile()
     }
 
-    // MARK: - Dead man's switch
-
-    private func startWatchdog() {
-        guard watchdog?.isRunning != true else { return }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", LidWatchdog.script(
-            watching: ProcessInfo.processInfo.processIdentifier, marker: paths.lidSleepMarker.path
-        )]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        watchdog = process
-    }
-
-    private func stopWatchdog() {
-        if watchdog?.isRunning == true { watchdog?.terminate() }
-        watchdog = nil
-    }
-
     // MARK: - Agent integrations
-
-    /// Agents call a copy of `lidless-hook` kept outside the bundle, so moving or rebuilding the
-    /// app never leaves their hooks pointing at nothing.
-    private func provisionHook() {
-        guard let bundled = Bundle.main.executableURL?
-            .deletingLastPathComponent().appendingPathComponent("lidless-hook"),
-            FileManager.default.isExecutableFile(atPath: bundled.path)
-        else { return }
-        let destination = paths.installedHook
-        guard !FileManager.default.contentsEqual(atPath: bundled.path, andPath: destination.path) else { return }
-
-        let staging = destination.deletingLastPathComponent()
-            .appendingPathComponent(".lidless-hook-\(UUID().uuidString)")
-        do {
-            try FileManager.default.createDirectory(
-                at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
-            )
-            try FileManager.default.copyItem(at: bundled, to: staging)
-            // An agent may be running the old copy right now; rename swaps it atomically.
-            guard rename(staging.path, destination.path) == 0 else {
-                throw CocoaError(.fileWriteUnknown)
-            }
-        } catch {
-            try? FileManager.default.removeItem(at: staging)
-        }
-    }
 
     func refreshIntegrations() {
         var statuses: [Agent: AgentIntegration.Status] = [:]
@@ -269,7 +220,7 @@ final class AppModel: ObservableObject {
         codexHasInlineHooks = AgentIntegration(agent: .codex).hasInlineCodexHooks
 
         // An agent is followed exactly when Lidless's hooks are in its configuration.
-        let tracked = Set(statuses.filter { $0.value == .installed || $0.value == .outdated }.keys)
+        let tracked = Set(statuses.filter(\.value.isConnected).keys)
         if settings.trackedAgents != tracked { settings.trackedAgents = tracked }
     }
 
@@ -277,7 +228,7 @@ final class AppModel: ObservableObject {
         let integration = AgentIntegration(agent: agent)
         do {
             if enabled {
-                provisionHook()
+                HookProvisioner.provision(to: paths.installedHook)
                 try integration.install(hookPath: paths.installedHook.path)
             } else {
                 try integration.uninstall()
@@ -292,35 +243,35 @@ final class AppModel: ObservableObject {
 
     // MARK: - Sudoers rule
 
-    func refreshHelperRule() {
-        helperRuleInstalled = FileManager.default.fileExists(atPath: SudoersRule.path)
+    func refreshSudoersRule() {
+        sudoersRuleInstalled = FileManager.default.fileExists(atPath: SudoersRule.path)
     }
 
-    func installHelperRule() {
-        runPrivileged(
+    func installSudoersRule() {
+        runAsAdministrator(
             SudoersRule.installScript(user: NSUserName(), uid: getuid()),
             prompt: "Lidless wants to add a rule that lets it turn closed-lid sleep off and back on without asking for your password."
         )
     }
 
-    func removeHelperRule() {
+    func removeSudoersRule() {
+        // Disarm first: without the rule Lidless could no longer turn sleep back on.
         if switches.lidArmed { toggleLidArmed() }
-        runPrivileged(
+        runAsAdministrator(
             SudoersRule.uninstallScript,
             prompt: "Lidless wants to remove its closed-lid sleep rule."
         )
     }
 
-    private func runPrivileged(_ script: String, prompt: String) {
-        guard !helperBusy else { return }
-        helperBusy = true
-        helperError = nil
-        AdministratorPrompt.run(script, prompt: prompt) { [weak self] failure in
+    private func runAsAdministrator(_ script: String, prompt: String) {
+        guard !sudoersRuleBusy else { return }
+        sudoersRuleBusy = true
+        sudoersRuleError = nil
+        AdministratorPrompt.run(script, prompt: prompt) { [weak self] result in
             guard let self else { return }
-            helperBusy = false
-            // An empty message means the user cancelled the password prompt.
-            if let failure, !failure.isEmpty { helperError = failure }
-            refreshHelperRule()
+            sudoersRuleBusy = false
+            if case let .failed(message) = result { sudoersRuleError = message }
+            refreshSudoersRule()
             onUpdate?()
         }
     }
